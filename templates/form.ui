@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>Form</class>
+ <widget class="QWidget" name="Form">
+  <property name="geometry">
+   <rect>
+    <x>300</x>
+    <y>300</y>
+    <width>600</width>
+    <height>400</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>YouTube / Udemy Transcriber</string>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item>
+    <widget class="QLabel" name="label_url">
+     <property name="text">
+      <string>Video URL:</string>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QLineEdit" name="urlInput"/>
+   </item>
+   <item>
+    <widget class="QLabel" name="label_engine">
+     <property name="text">
+      <string>Engine Seçimi:</string>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QComboBox" name="engineSelect">
+     <item>
+      <property name="text">
+       <string>auto</string>
+      </property>
+     </item>
+     <item>
+      <property name="text">
+       <string>whisper</string>
+      </property>
+     </item>
+     <item>
+      <property name="text">
+       <string>vosk</string>
+      </property>
+     </item>
+     <item>
+      <property name="text">
+       <string>deepspeech</string>
+      </property>
+     </item>
+    </widget>
+   </item>
+   <item>
+    <widget class="QPushButton" name="transcribeButton">
+     <property name="text">
+      <string>Transcribe</string>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QLabel" name="label_result">
+     <property name="text">
+      <string>Transkript:</string>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QTextEdit" name="resultOutput"/>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

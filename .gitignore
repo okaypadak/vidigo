@@ -1,0 +1,2 @@
+# .pyc dosyalarını hariç tut (takip et)
+*.pyc

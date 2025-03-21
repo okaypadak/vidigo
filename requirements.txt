@@ -1,0 +1,5 @@
+youtube-transcript-api~=1.0.2
+yt-dlp~=2024.10.22
+flask~=3.0.3
+pytube~=15.0.0
+vosk~=0.3.45
