@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <title>YouTube Transkript</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      max-width: 600px;
+      margin: 40px auto;
+      padding: 20px;
+      border-radius: 10px;
+      box-shadow: 0 0 10px #ccc;
+    }
+    textarea {
+      width: 100%;
+      height: 250px;
+      margin-top: 20px;
+      font-family: monospace;
+    }
+  </style>
+</head>
+<body>
+  <h2>🎙️ YouTube Transkript Al</h2>
+  <label>🔗 YouTube URL:</label><br />
+  <input type="text" id="videoUrl" style="width:100%; padding:8px;" placeholder="https://www.youtube.com/watch?v=..." />
+
+  <br /><br />
+  <label>⚙️ Transkript Motoru:</label><br />
+  <select id="engine" style="width:100%; padding:8px;">
+    <option value="">Otomatik (önce transcript varsa kullan)</option>
+    <option value="whisper">Whisper</option>
+    <option value="vosk">Vosk</option>
+    <option value="deepspeech">DeepSpeech</option>
+  </select>
+
+  <br /><br />
+  <button onclick="getTranscript()" style="padding:10px 20px;">🎬 Transkript Al</button>
+
+  <textarea id="result" placeholder="Transkript burada görünecek..."></textarea>
+
+  <script>
+    async function getTranscript() {
+      const url = document.getElementById("videoUrl").value;
+      const engine = document.getElementById("engine").value;
+      const resultArea = document.getElementById("result");
+
+      if (!url) {
+        alert("Lütfen bir YouTube linki girin.");
+        return;
+      }
+
+      resultArea.value = "⏳ İşleniyor, lütfen bekleyin...";
+
+      let apiUrl = `/transcribe?url=${encodeURIComponent(url)}`;
+      if (engine) {
+        apiUrl += `&engine=${engine}`;
+      }
+
+      try {
+        const response = await fetch(apiUrl);
+        const data = await response.json();
+
+        if (data.error) {
+          resultArea.value = "❌ Hata: " + data.error;
+        } else {
+          if (Array.isArray(data.transcript)) {
+            // YouTube transcript formatı
+            resultArea.value = data.transcript.map(t => t.text).join(" ");
+          } else {
+            // Whisper/Vosk/DeepSpeech
+            resultArea.value = data.transcript.text || JSON.stringify(data.transcript);
+          }
+        }
+      } catch (err) {
+        resultArea.value = "❌ Hata: " + err.message;
+      }
+    }
+  </script>
+</body>
+</html>
