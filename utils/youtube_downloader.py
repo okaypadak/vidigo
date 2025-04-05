@@ -9,15 +9,18 @@ def download_audio_youtube(url, save_path="downloads"):
     ydl_opts = {
         'format': 'bestaudio/best',
         'outtmpl': full_path,
-        'postprocessors': [
-            {
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'wav',
-                'preferredquality': '192',
-            }
-        ],
-        'ffmpeg_location': 'ffmpeg',
-        'noplaylist': True
+        'postprocessors': [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'wav',
+            'preferredquality': '192',
+        }],
+        'noplaylist': True,
+        'quiet': True,
+        'no_warnings': True,
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+        },
+        # 'cookiefile': 'cookies.txt',  # Eğer giriş gerektiren video varsa burayı aç
     }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:

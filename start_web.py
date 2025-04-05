@@ -5,7 +5,6 @@ import uuid
 from flask import Flask, render_template, request, jsonify
 from pytube import YouTube
 
-from transcribers.deepspeech_transcriber import transcribe_deepspeech
 from transcribers.vosk_transcriber import transcribe_vosk
 from transcribers.whisper_transcriber import transcribe_whisper
 from utils.file_utils import (
@@ -24,7 +23,19 @@ def index():
     return render_template("index.html")
 
 
-# Transkript API
+@app.route("/status", methods=["GET"])
+def status():
+    try:
+        import torch
+        gpu_available = torch.cuda.is_available()
+    except ImportError:
+        gpu_available = False
+
+    return jsonify({
+        "gpu": gpu_available
+    })
+
+
 @app.route("/transcribe", methods=["GET"])
 def transcribe():
     url = request.args.get("url")
@@ -45,16 +56,8 @@ def transcribe():
         else:
             return jsonify({"error": "Sadece YouTube ve Udemy destekleniyor."}), 400
 
-        # Daha önce kaydedildiyse yükle
-        cached = load_transcript_from_file(video_id)
-        if cached:
-            return jsonify({
-                "engine": cached.get("engine", "cached"),
-                "transcript": cached.get("transcript")
-            })
 
-        # -------- AUTO MODE --------
-        if engine == "auto":
+        if engine == "transcript_api":
             if is_youtube:
                 transcript = get_transcript_api(video_id, lang)
                 if transcript:
@@ -102,8 +105,6 @@ def transcribe():
             result = transcribe_whisper(audio_path, lang)
         elif engine == "vosk":
             result = transcribe_vosk(audio_path)
-        elif engine == "deepspeech":
-            result = transcribe_deepspeech(audio_path)
         else:
             return jsonify({"error": f"Bilinmeyen engine: {engine}"}), 400
 
