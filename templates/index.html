@@ -2,7 +2,7 @@
 <html lang="tr">
 <head>
   <meta charset="UTF-8" />
-  <title>YouTube Transkript</title>
+  <title>Udemy / YouTube Transkript</title>
   <style>
     body {
       background-color: #1e1e1e;
@@ -15,20 +15,24 @@
       box-shadow: 0 0 20px #000;
     }
 
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-top: 15px;
+    }
+
     input, select, button, textarea {
       background-color: #2c2c2c;
       color: #f0f0f0;
       border: 1px solid #444;
       border-radius: 5px;
-    }
-
-    input, select, button {
       padding: 8px;
       width: 100%;
+      box-sizing: border-box;
     }
 
     button {
-      margin-top: 10px;
       cursor: pointer;
     }
 
@@ -37,102 +41,164 @@
     }
 
     textarea {
-      width: 100%;
       height: 250px;
-      margin-top: 20px;
       font-family: monospace;
       resize: vertical;
     }
 
-    #gpuStatus {
-      font-weight: bold;
-      color: #00ff99;
-      margin-bottom: 10px;
-    }
-
     label {
-      display: block;
-      margin-top: 10px;
+      font-weight: bold;
     }
   </style>
 </head>
 <body>
-  <h2>🎙️ YouTube / Ses Transkripti Al</h2>
+  <h2>🎙️ Udemy / YouTube Transkript Sistemi</h2>
 
   <p id="gpuStatus">GPU durumu: kontrol ediliyor...</p>
 
-  <label>🔗 YouTube veya Udemy URL:</label>
-  <input type="text" id="videoUrl" placeholder="https://www.youtube.com/watch?v=..." />
+  <div class="form-group">
+    <label>🔗 YouTube veya Udemy URL:</label>
+    <input type="text" id="videoUrl" placeholder="https://www.youtube.com/watch?v=..." />
+  </div>
 
-  <label>📁 Ya da ses/video dosyası yükleyin:</label>
-  <input type="file" id="audioFile" accept="audio/*,video/*" />
+  <div class="form-group">
+    <button onclick="scrapeUdemy()">📋 1. Kazıma Yap</button>
+  </div>
 
-  <label>⚙️ Transkript Motoru:</label>
-  <select id="engine">
-    <option value="transcript_api">Transkript API (Youtube)</option>
-    <option value="whisper">Whisper</option>
-    <option value="vosk">Vosk</option>
-    <option value="deepspeech">DeepSpeech</option>
-  </select>
+  <div class="form-group">
+    <label>🎯 Bölüm Seç:</label>
+    <select id="sectionSelect">
+      <option disabled selected>Önce kazıma yapın</option>
+    </select>
+    <button onclick="recordUdemy()">🎙️ 2. Kayıt Yap</button>
+  </div>
 
-  <button onclick="getTranscript()">🎬 Transkript Al</button>
+  <div class="form-group">
+    <label>📁 WAV Dosyası Seç (Transkripsiyon için):</label>
+    <select id="wavFileList">
+      <option disabled selected>Bir dosya seçin</option>
+    </select>
+  </div>
 
-  <textarea id="result" placeholder="Transkript burada görünecek..."></textarea>
+  <div class="form-group">
+    <button onclick="transcribeWav()">📝 3. Transkript Al (Whisper)</button>
+  </div>
+
+  <div class="form-group">
+    <label>🧾 Transkript:</label>
+    <textarea id="result" placeholder="Transkript burada görünecek..."></textarea>
+  </div>
 
   <script>
-    async function getTranscript() {
-      const url = document.getElementById("videoUrl").value;
-      const engine = document.getElementById("engine").value;
-      const fileInput = document.getElementById("audioFile");
-      const resultArea = document.getElementById("result");
-
-      resultArea.value = "⏳ İşleniyor, lütfen bekleyin...";
-
-      const formData = new FormData();
-      formData.append("engine", engine);
-
-      if (fileInput.files.length > 0) {
-        formData.append("audio", fileInput.files[0]);
-      } else if (url) {
-        formData.append("url", url);
-      } else {
-        alert("Lütfen bir YouTube/Udemy linki girin veya ses/video dosyası yükleyin.");
-        return;
-      }
-
-      try {
-        const response = await fetch("/transcribe", {
-          method: "POST",
-          body: formData
-        });
-        const data = await response.json();
-
-        if (data.error) {
-          resultArea.value = "❌ Hata: " + data.error;
-        } else {
-          if (Array.isArray(data.transcript)) {
-            resultArea.value = data.transcript.map(t => t.text).join(" ");
-          } else {
-            resultArea.value = data.transcript.text || JSON.stringify(data.transcript);
-          }
-        }
-      } catch (err) {
-        resultArea.value = "❌ Hata: " + err.message;
-      }
-    }
-
     async function checkGpuStatus() {
       try {
-        const response = await fetch("/status");
-        const data = await response.json();
-        const gpuText = data.gpu ? "GPU: ✅ Aktif" : "GPU: ❌ Pasif";
-        document.getElementById("gpuStatus").innerText = gpuText;
-      } catch (err) {
+        const res = await fetch("/status");
+        const data = await res.json();
+        document.getElementById("gpuStatus").innerText = data.gpu ? "GPU: ✅ Aktif" : "GPU: ❌ Pasif";
+      } catch {
         document.getElementById("gpuStatus").innerText = "GPU: ❓ Bilgi alınamadı";
       }
     }
 
+    async function scrapeUdemy() {
+      const url = document.getElementById("videoUrl").value;
+      if (!url.includes("udemy.com")) return alert("Lütfen geçerli bir Udemy URL girin");
+      await fetch("/udemy_scraper", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url })
+      }).then(r => r.json()).then(d => {
+        alert("Kazıma tamamlandı!");
+        loadUdemySections();
+      });
+    }
+
+    async function loadUdemySections() {
+      const res = await fetch("/udemy_sections");
+      const data = await res.json();
+      const select = document.getElementById("sectionSelect");
+      select.innerHTML = "";
+
+      // Hepsi seçeneği en üste ekleniyor
+      const allOpt = document.createElement("option");
+      allOpt.value = "__ALL__";
+      allOpt.innerText = "📚 Hepsi";
+      select.appendChild(allOpt);
+
+      if (data.error) {
+        const opt = document.createElement("option");
+        opt.innerText = "⚠️ " + data.error;
+        select.appendChild(opt);
+        return;
+      }
+
+      data.sections.forEach(sec => {
+        const opt = document.createElement("option");
+        opt.value = sec;
+        opt.innerText = sec;
+        select.appendChild(opt);
+      });
+    }
+
+    async function recordUdemy() {
+      const url = document.getElementById("videoUrl").value;
+      const selected = document.getElementById("sectionSelect").value;
+
+      await fetch("/udemy_record", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url, selected })
+      }).then(r => r.json()).then(d => {
+        alert("Kayıt işlemi başlatıldı!");
+        loadWavFiles();
+      });
+    }
+
+    async function loadWavFiles() {
+      const res = await fetch("/wav_files");
+      const data = await res.json();
+      const select = document.getElementById("wavFileList");
+      select.innerHTML = "";
+      if (data.files && data.files.length) {
+        data.files.forEach(file => {
+          const opt = document.createElement("option");
+          opt.value = file;
+          opt.innerText = file;
+          select.appendChild(opt);
+        });
+      } else {
+        const opt = document.createElement("option");
+        opt.innerText = "Hiç WAV dosyası bulunamadı";
+        select.appendChild(opt);
+      }
+    }
+
+    async function transcribeWav() {
+      const file = document.getElementById("wavFileList").value;
+      if (!file) return alert("Lütfen bir WAV dosyası seçin");
+
+      const formData = new FormData();
+      formData.append("engine", "whisper");
+      formData.append("url", "wavfiles/" + file);
+
+      document.getElementById("result").value = "⏳ Transkript alınıyor...";
+
+      const res = await fetch("/transcribe", {
+        method: "POST",
+        body: formData
+      });
+
+      const data = await res.json();
+      if (data.error) {
+        document.getElementById("result").value = "❌ Hata: " + data.error;
+      } else {
+        document.getElementById("result").value = data.transcript.text || JSON.stringify(data.transcript);
+      }
+    }
+
     checkGpuStatus();
+    loadWavFiles();
+    loadUdemySections();
   </script>
 </body>
 </html>

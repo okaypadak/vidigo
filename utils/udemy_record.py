@@ -6,16 +6,13 @@ from pathlib import Path
 import json
 import uuid
 import shutil
+from concurrent.futures import ProcessPoolExecutor
 import undetected_chromedriver as uc
 from selenium.webdriver import ActionChains
 from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from concurrent.futures import ProcessPoolExecutor
 
-JSON_FILE = "~/udemy_course_list.json"
-COOKIES_PATH = "/home/oki/www.udemy.com_13-07-2025.json"
-OUTDIR = os.path.expanduser("/home/oki/test/udemy-kayitlar")
+COOKIES_PATH = os.path.expanduser("~/udemy_cookie.json")
+OUTDIR = os.path.expanduser("~/wavfiles")
 os.makedirs(OUTDIR, exist_ok=True)
 
 def temizle_null_sinks():
@@ -33,59 +30,6 @@ def sanitize_filename(name):
     name = name.replace(' ', '_')
     name = re.sub(r'_+', '_', name)
     return name
-
-def reset_video_position(browser):
-    try:
-        WebDriverWait(browser, 15).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, '[data-purpose="video-progress-bar"]'))
-        )
-        slider = browser.find_element(By.CSS_SELECTOR, '[data-purpose="video-progress-bar"]')
-        actions = ActionChains(browser)
-        actions.move_to_element_with_offset(slider, 5, 5).click().perform()
-        print("⏮️ Video başa alındı (data-purpose selector ile).")
-    except Exception as e:
-        print(f"⚠️ Video ilerleme çubuğu tıklaması başarısız: {e}")
-
-
-def get_pstree_pids(root_pid):
-    try:
-        cmd = ["pstree", "-p", str(root_pid)]
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        output = result.stdout
-
-        import re
-        pids = re.findall(r"\((\d+)\)", output)
-        return list(set(pids))
-    except Exception as e:
-        print(f"⚠️ pstree PID listesi alınamadı: {e}")
-        return []
-
-def find_sink_input_id_by_pid(pids):
-    result = subprocess.run(["pactl", "list", "sink-inputs"], capture_output=True, text=True)
-    lines = result.stdout.splitlines()
-    current_id = None
-
-    for line in lines:
-        line = line.strip()
-        if line.startswith("Sink Input") or line.startswith("Alıcı Girişi"):
-            current_id = line.split("#")[-1].strip()
-
-        if "application.process.id" in line:
-            proc_id = line.split('"')[1]
-            if proc_id in pids:
-                print(f"✅ Eşleşme bulundu! Sink Input: {current_id} ← PID: {proc_id}")
-                return current_id
-    return None
-
-def click_video_play_button(browser):
-    try:
-        time.sleep(5)
-        video = browser.find_element(By.TAG_NAME, "video")
-        actions = ActionChains(browser)
-        actions.move_to_element(video).pause(1).click().perform()
-        print("🖱️ Mouse ile video üzerine gidildi ve tıklandı.")
-    except Exception as e:
-        print(f"⚠️ Video play tıklaması başarısız: {e}")
 
 def get_uc_binary_copy(session_id):
     uc_path = os.path.expanduser("~/.local/share/undetected_chromedriver/undetected_chromedriver")
@@ -107,7 +51,6 @@ def start_uc_browser(url, profile_dir, session_id):
     browser = uc.Chrome(options=options, driver_executable_path=binary_path)
 
     browser.get("https://www.udemy.com/")
-    time.sleep(3)
 
     if os.path.exists(COOKIES_PATH):
         with open(COOKIES_PATH, "r", encoding="utf-8") as f:
@@ -125,16 +68,65 @@ def start_uc_browser(url, profile_dir, session_id):
 
     browser.get(url)
     print("✅ Sayfa yüklendi:", url)
-
     return browser
+
+def click_video_play_button(browser):
+    try:
+        time.sleep(5)
+        video = browser.find_element(By.TAG_NAME, "video")
+        actions = ActionChains(browser)
+        actions.move_to_element(video).pause(1).click().perform()
+        print("🖱️ Mouse ile video üzerine gidildi ve tıklandı.")
+    except Exception as e:
+        print(f"⚠️ Video play tıklaması başarısız: {e}")
+
+def get_pstree_pids(root_pid):
+    try:
+        cmd = ["pstree", "-p", str(root_pid)]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        return list(set(re.findall(r"\((\d+)\)", result.stdout)))
+    except Exception as e:
+        print(f"⚠️ pstree PID listesi alınamadı: {e}")
+        return []
+
+def find_sink_input_id_by_pid(pids):
+    result = subprocess.run(["pactl", "list", "sink-inputs"], capture_output=True, text=True)
+    lines = result.stdout.splitlines()
+    current_id = None
+
+    for line in lines:
+        line = line.strip()
+        if line.startswith("Sink Input") or line.startswith("Alıcı Girişi"):
+            current_id = line.split("#")[-1].strip()
+        if "application.process.id" in line:
+            proc_id = line.split('"')[1]
+            if proc_id in pids:
+                print(f"✅ Eşleşme bulundu! Sink Input: {current_id} ← PID: {proc_id}")
+                return current_id
+    return None
+
+
+def reset_video_to_start(browser):
+    try:
+        time.sleep(2)
+        # İlerleme barını bul
+        progress_bar = browser.find_element(By.CSS_SELECTOR, "[data-purpose='video-progress-bar']")
+
+        # Mouse'u en sol noktaya getirip tıkla
+        actions = ActionChains(browser)
+        actions.move_to_element_with_offset(progress_bar, 2, 5).click().perform()
+
+        print("🖱️ İlerleme barının en soluna tıklanarak video başa alındı.")
+    except Exception as e:
+        print(f"⚠️ İlerleme barı tıklama hatası: {e}")
 
 def kayit_tek_satir(lecture_info):
     if lecture_info["duration"] == "?":
-        print(f"⏭️ Quiz ya da süre bilinmiyor, atlanıyor: {lecture_info['lecture']}")
+        print(f"⏭️ Süre bilinmiyor, atlanıyor: {lecture_info['lecture']}")
         return
 
     url = lecture_info["url"]
-    duration = int(lecture_info["duration"]) * 60
+    duration = (int(lecture_info["duration"]) * 60) + 60
     lecture_title = lecture_info["lecture"]
     safe_title = sanitize_filename(lecture_title)
 
@@ -143,18 +135,20 @@ def kayit_tek_satir(lecture_info):
     monitor_name = f"{sink_name}.monitor"
     outfile = f"{OUTDIR}/{safe_title}.wav"
     profile_dir = f"/tmp/chrome-profile-{session_id}"
+    # profile_dir = os.path.expanduser("~/.config/udemy_profile")
     os.makedirs(profile_dir, exist_ok=True)
 
     print(f"🔊 Sanal çıkış oluşturuluyor: {sink_name}")
-    pactl_cmd = ["pactl", "load-module", "module-null-sink",
-                 f"sink_name={sink_name}",
-                 f"sink_properties=device.description=Sink{session_id}"]
-    module_id = subprocess.check_output(pactl_cmd).decode().strip()
+    module_id = subprocess.check_output([
+        "pactl", "load-module", "module-null-sink",
+        f"sink_name={sink_name}",
+        f"sink_properties=device.description=Sink{session_id}"
+    ]).decode().strip()
 
     print(f"🌐 UC Browser başlatılıyor... ({session_id})")
     browser = start_uc_browser(url, profile_dir, session_id)
 
-    #reset_video_position(browser)
+    reset_video_to_start(browser)
     click_video_play_button(browser)
 
     browser_pid = browser.browser_pid
@@ -168,7 +162,6 @@ def kayit_tek_satir(lecture_info):
         print(f"❌ Sink-input bulunamadı")
 
     print(f"🎤 Kayıt başlıyor ({duration} sn)...")
-
     subprocess.call([
         "ffmpeg", "-f", "pulse", "-i", monitor_name, "-t", str(duration),
         outfile, "-loglevel", "error"
@@ -177,46 +170,36 @@ def kayit_tek_satir(lecture_info):
     subprocess.call(["pactl", "unload-module", module_id])
     print(f"✅ Kayıt tamamlandı: {outfile}")
 
-    if browser.service.process and browser.service.process.poll() is None:
-        try:
-            browser.quit()
-        except Exception as e:
-            print(f"⚠️ Tarayıcı zaten kapanmış olabilir: {e}")
+    try:
+        browser.quit()
+    except Exception:
+        pass
 
-    print(f"🛑 Tarayıcı kapatıldı: {session_id}")
-
-def filtrele_kayitlar(entries):
-    """Daha önce kaydedilmiş veya süresi olmayan dersleri filtrele"""
+def filtrele_kayitlar(lectures):
     filtered = []
-    for entry in entries:
+    for entry in lectures:
         if entry["duration"] == "?":
-            print(f"⏭️ Süre yok, atlanıyor: {entry['lecture']}")
             continue
-
         title = sanitize_filename(entry["lecture"])
         outfile = Path(OUTDIR) / f"{title}.wav"
-        if outfile.exists():
-            print(f"⏭️ Daha önce kaydedilmiş, atlanıyor: {title}")
-            continue
-
-        filtered.append(entry)
-
+        if not outfile.exists():
+            filtered.append(entry)
     return filtered
 
 def chunkify(lst, n):
     for i in range(0, len(lst), n):
         yield lst[i:i + n]
 
-def load_json_entries():
-    if not Path(JSON_FILE).exists():
-        print(f"❌ JSON dosyası bulunamadı: {JSON_FILE}")
-        return []
-    with open(JSON_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-def asenkron(batch_size=3):
+def asenkron(json_path, batch_size=2):
     temizle_null_sinks()
-    entries = filtrele_kayitlar(load_json_entries())
+    with open(json_path, "r", encoding="utf-8") as f:
+        course_data = json.load(f)
+
+    all_lectures = []
+    for section in course_data:
+        all_lectures.extend(section["lectures"])
+
+    entries = filtrele_kayitlar(all_lectures)
 
     for group in chunkify(entries, batch_size):
         with ProcessPoolExecutor(max_workers=batch_size) as executor:
@@ -228,14 +211,25 @@ def asenkron(batch_size=3):
                     print(f"❌ Hata oluştu: {e}")
         print(f"✅ Grup tamamlandı: {len(group)} kayıt işlendi.")
 
-def senkron():
+def asenkron_filtered(json_path, section_list, batch_size=3):
     temizle_null_sinks()
-    entries = load_json_entries()
+    with open(json_path, "r", encoding="utf-8") as f:
+        course_data = json.load(f)
 
-    for info in entries:
-        kayit_tek_satir(info)
+    selected_lectures = []
+    for sec in section_list:
+        for section in course_data:
+            if section["section"] == sec:
+                selected_lectures.extend(section["lectures"])
 
-    print("🎉 Tüm kayıtlar tamamlandı.")
+    entries = filtrele_kayitlar(selected_lectures)
 
-if __name__ == "__main__":
-    asenkron()
+    for group in chunkify(entries, batch_size):
+        with ProcessPoolExecutor(max_workers=batch_size) as executor:
+            futures = [executor.submit(kayit_tek_satir, entry) for entry in group]
+            for f in futures:
+                try:
+                    f.result()
+                except Exception as e:
+                    print(f"❌ Hata oluştu: {e}")
+        print(f"✅ Grup tamamlandı: {len(group)} kayıt işlendi.")
