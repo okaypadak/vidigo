@@ -109,16 +109,29 @@ def find_sink_input_id_by_pid(pids):
 def reset_video_to_start(browser):
     try:
         time.sleep(2)
-        # İlerleme barını bul
+
         progress_bar = browser.find_element(By.CSS_SELECTOR, "[data-purpose='video-progress-bar']")
 
-        # Mouse'u en sol noktaya getirip tıkla
-        actions = ActionChains(browser)
-        actions.move_to_element_with_offset(progress_bar, 2, 5).click().perform()
+        location = progress_bar.location
+        size = progress_bar.size
 
-        print("🖱️ İlerleme barının en soluna tıklanarak video başa alındı.")
+        print("📍 İlerleme çubuğu konumu ve boyutu:")
+        print(f"  - Location (x, y): {location['x']}, {location['y']}")
+        print(f"  - Size (w x h): {size['width']} x {size['height']}")
+
+        # En sola (başlangıç noktasına) tıklamak için offset değerlerini belirleyelim
+        offset_x = 2
+        offset_y = size['height'] // 2  # dikey ortası
+
+        print(f"🧭 Offset ile tıklanacak nokta: x={offset_x}, y={offset_y}")
+
+        actions = ActionChains(browser)
+        actions.move_to_element_with_offset(progress_bar, offset_x, offset_y).pause(0.5).click().perform()
+
+        print("🖱️ İlerleme çubuğunun en soluna tıklandı (video başa sarılmalı).")
+
     except Exception as e:
-        print(f"⚠️ İlerleme barı tıklama hatası: {e}")
+        print(f"⚠️ İlerleme çubuğu tıklama hatası: {e}")
 
 def kayit_tek_satir(lecture_info):
     if lecture_info["duration"] == "?":
@@ -150,6 +163,8 @@ def kayit_tek_satir(lecture_info):
 
     reset_video_to_start(browser)
     click_video_play_button(browser)
+
+    time.sleep(2)
 
     browser_pid = browser.browser_pid
     pid_list = get_pstree_pids(browser_pid)
@@ -190,7 +205,7 @@ def chunkify(lst, n):
     for i in range(0, len(lst), n):
         yield lst[i:i + n]
 
-def asenkron(json_path, batch_size=2):
+def asenkron(json_path, batch_size=3):
     temizle_null_sinks()
     with open(json_path, "r", encoding="utf-8") as f:
         course_data = json.load(f)

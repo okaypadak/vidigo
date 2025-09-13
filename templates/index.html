@@ -2,7 +2,7 @@
 <html lang="tr">
 <head>
   <meta charset="UTF-8" />
-  <title>Udemy / YouTube Transkript</title>
+  <title>Udemy / YouTube / X.com Transkript</title>
   <style>
     body {
       background-color: #1e1e1e;
@@ -49,20 +49,44 @@
     label {
       font-weight: bold;
     }
+
+    .toast {
+      visibility: hidden;
+      min-width: 250px;
+      background-color: #444;
+      color: #fff;
+      text-align: center;
+      border-radius: 8px;
+      padding: 12px 20px;
+      position: fixed;
+      z-index: 9999;
+      left: 50%;
+      bottom: 30px;
+      transform: translateX(-50%);
+      font-size: 16px;
+      opacity: 0;
+      transition: opacity 0.5s ease-in-out, visibility 0.5s;
+    }
+
+    .toast.show {
+      visibility: visible;
+      opacity: 1;
+    }
   </style>
 </head>
 <body>
-  <h2>🎙️ Udemy / YouTube Transkript Sistemi</h2>
+  <h2>🎙️ Udemy / YouTube / X.com Transkript Sistemi</h2>
 
   <p id="gpuStatus">GPU durumu: kontrol ediliyor...</p>
 
   <div class="form-group">
-    <label>🔗 YouTube veya Udemy URL:</label>
-    <input type="text" id="videoUrl" placeholder="https://www.youtube.com/watch?v=..." />
+    <label>🔗 YouTube, X.com veya Udemy URL:</label>
+    <input type="text" id="videoUrl" placeholder="https://www.youtube.com/watch?v=... veya https://x.com/... " />
   </div>
 
   <div class="form-group">
-    <button onclick="scrapeUdemy()">📋 1. Kazıma Yap</button>
+    <button id="scrapeBtn" onclick="scrapeUdemy()" style="display: none;">📋 1. Kazıma Yap</button>
+    <button id="downloadBtn" onclick="downloadYouTube()" style="display: none;">📥 1. İndir</button>
   </div>
 
   <div class="form-group">
@@ -75,9 +99,12 @@
 
   <div class="form-group">
     <label>📁 WAV Dosyası Seç (Transkripsiyon için):</label>
-    <select id="wavFileList">
-      <option disabled selected>Bir dosya seçin</option>
-    </select>
+    <div style="display: flex; gap: 10px;">
+      <select id="wavFileList" style="flex: 1;">
+        <option disabled selected>Bir dosya seçin</option>
+      </select>
+      <button style="width: 50px;" onclick="loadWavFiles()">🔄</button>
+    </div>
   </div>
 
   <div class="form-group">
@@ -89,7 +116,11 @@
     <textarea id="result" placeholder="Transkript burada görünecek..."></textarea>
   </div>
 
+  <div id="toast" class="toast"></div>
+
   <script>
+    document.getElementById("videoUrl").addEventListener("input", checkUrlType);
+
     async function checkGpuStatus() {
       try {
         const res = await fetch("/status");
@@ -100,16 +131,71 @@
       }
     }
 
+    function checkUrlType() {
+      const url = document.getElementById("videoUrl").value;
+      const scrapeBtn = document.getElementById("scrapeBtn");
+      const downloadBtn = document.getElementById("downloadBtn");
+
+      if (url.includes("udemy.com")) {
+        scrapeBtn.style.display = "block";
+        downloadBtn.style.display = "none";
+      } else if (
+        url.includes("youtube.com") ||
+        url.includes("youtu.be") ||
+        url.includes("x.com") ||
+        url.includes("twitter.com")
+      ) {
+        scrapeBtn.style.display = "none";
+        downloadBtn.style.display = "block";
+      } else {
+        scrapeBtn.style.display = "none";
+        downloadBtn.style.display = "none";
+      }
+    }
+
+    function showToast(message, duration = 3000) {
+      const toast = document.getElementById("toast");
+      toast.innerText = message;
+      toast.classList.add("show");
+      setTimeout(() => {
+        toast.classList.remove("show");
+      }, duration);
+    }
+
     async function scrapeUdemy() {
       const url = document.getElementById("videoUrl").value;
       if (!url.includes("udemy.com")) return alert("Lütfen geçerli bir Udemy URL girin");
+
+      showToast("🔍 Kazıma başlatıldı...");
+
       await fetch("/udemy_scraper", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url })
       }).then(r => r.json()).then(d => {
-        alert("Kazıma tamamlandı!");
         loadUdemySections();
+        loadWavFiles();
+        showToast("✅ Kazıma tamamlandı.");
+      });
+    }
+
+    async function downloadYouTube() {
+      const url = document.getElementById("videoUrl").value;
+      if (!url) return;
+
+      showToast("📥 İndirme başlatıldı...");
+
+      await fetch("/download_audio", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url })
+      }).then(r => r.json()).then(d => {
+        loadWavFiles();
+        if (d.error) {
+          showToast("🚫 Hata: " + d.error);
+        } else {
+          showToast("✅ İndirme tamamlandı.");
+        }
       });
     }
 
@@ -119,7 +205,6 @@
       const select = document.getElementById("sectionSelect");
       select.innerHTML = "";
 
-      // Hepsi seçeneği en üste ekleniyor
       const allOpt = document.createElement("option");
       allOpt.value = "__ALL__";
       allOpt.innerText = "📚 Hepsi";
@@ -144,13 +229,15 @@
       const url = document.getElementById("videoUrl").value;
       const selected = document.getElementById("sectionSelect").value;
 
+      showToast("🎙️ Kayıt başlatıldı...");
+
       await fetch("/udemy_record", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url, selected })
       }).then(r => r.json()).then(d => {
-        alert("Kayıt işlemi başlatıldı!");
         loadWavFiles();
+        showToast("✅ Kayıt tamamlandı.");
       });
     }
 
@@ -182,6 +269,7 @@
       formData.append("url", "wavfiles/" + file);
 
       document.getElementById("result").value = "⏳ Transkript alınıyor...";
+      showToast("📝 Transkripsiyon başladı...");
 
       const res = await fetch("/transcribe", {
         method: "POST",
@@ -191,14 +279,17 @@
       const data = await res.json();
       if (data.error) {
         document.getElementById("result").value = "❌ Hata: " + data.error;
+        showToast("🚫 Hata oluştu.");
       } else {
         document.getElementById("result").value = data.transcript.text || JSON.stringify(data.transcript);
+        showToast("✅ Transkripsiyon tamamlandı.");
       }
     }
 
     checkGpuStatus();
     loadWavFiles();
     loadUdemySections();
+    checkUrlType();
   </script>
 </body>
 </html>

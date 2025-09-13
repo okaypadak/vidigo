@@ -2,8 +2,7 @@ import warnings
 import torch
 import whisper
 
-
-def transcribe_whisper(audio_path, lang="tr", model_path="medium"):
+def transcribe_whisper(audio_path, lang="tr", model_path="medium", with_timestamps=False):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
 
@@ -20,20 +19,17 @@ def transcribe_whisper(audio_path, lang="tr", model_path="medium"):
             else:
                 result = model.transcribe(audio_path, language=lang, fp16=False)
 
-            # Zaman damgalarını çıkartarak transkripti döndür
             transcribed_text = ""
 
-            # 'segments' içindeki her bir segmenti ele alalım
             for segment in result['segments']:
-                start_time = segment['start']  # Segmentin başlangıç zamanı
-                end_time = segment['end']  # Segmentin bitiş zamanı
-                text = segment['text']  # Segmentin metni
+                text = segment['text']
+                if with_timestamps:
+                    start_time = segment['start']
+                    end_time = segment['end']
+                    transcribed_text += f"Başlangıç: {start_time:.2f}s - Bitiş: {end_time:.2f}s\n"
+                transcribed_text += f"Metin: {text}\n\n" if with_timestamps else f"{text.strip()} "
 
-                # Her segmentin zaman damgalarını ve metnini yazdırıyoruz
-                transcribed_text += f"Başlangıç: {start_time:.2f}s - Bitiş: {end_time:.2f}s\n"
-                transcribed_text += f"Metin: {text}\n\n"
-
-            return transcribed_text
+            return transcribed_text.strip()
         except Exception as e:
             print(f"Transkripsiyon hatası: {e}")
             return f"Transkripsiyon hatası: {str(e)}"

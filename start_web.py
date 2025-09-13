@@ -1,11 +1,13 @@
 import json
 import os
+import shutil
 import uuid
 from flask import Flask, render_template, request, jsonify
 from transcribers.whisper_transcriber import transcribe_whisper
 from utils.file_utils import save_transcript_to_file
 from utils.udemy_scraper import scrape_udemy_course
 from utils.udemy_record import asenkron, asenkron_filtered
+from utils.video_downloader import download_audio_generic
 
 app = Flask(__name__)
 
@@ -37,7 +39,7 @@ def udemy_scraper():
         return jsonify({"error": "URL boş olamaz."}), 400
 
     try:
-        scrape_udemy_course(url)  # JSON_PATH'e sabit yazar
+        scrape_udemy_course(url)
         return jsonify({"status": "success"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -55,7 +57,6 @@ def udemy_record():
             asenkron(JSON_PATH)
         else:
             asenkron_filtered(JSON_PATH, [selected_section])
-
         return jsonify({"status": "recording_started"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -70,7 +71,7 @@ def list_wav_files():
 
 @app.route("/transcribe", methods=["POST"])
 def transcribe():
-    url = request.form.get("url")  # Bu aslında WAV dosya yolu olacak
+    url = request.form.get("url")
     if not url or not url.endswith(".wav"):
         return jsonify({"error": "Geçerli bir WAV dosyası yolu sağlanmalıdır."}), 400
 
@@ -103,6 +104,22 @@ def get_udemy_sections():
 
         sections = [item["section"] for item in data]
         return jsonify({"sections": sections})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/download_audio", methods=["POST"])
+def download_audio():
+    data = request.get_json()
+    url = data.get("url", "").strip()
+
+    if not url:
+        return jsonify({"error": "URL boş olamaz."}), 400
+
+    try:
+        downloaded_path = download_audio_generic(url)
+        dest_path = os.path.join(WAV_DIR, os.path.basename(downloaded_path))
+        shutil.move(downloaded_path, dest_path)
+        return jsonify({"status": "success", "filename": os.path.basename(dest_path)})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
