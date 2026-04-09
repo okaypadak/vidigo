@@ -10,10 +10,12 @@ from concurrent.futures import ProcessPoolExecutor
 import undetected_chromedriver as uc
 from selenium.webdriver import ActionChains
 from selenium.webdriver.common.by import By
+from utils.ffmpeg_utils import get_ffmpeg_binary
 
 COOKIES_PATH = os.path.expanduser("~/udemy_cookie.json")
-OUTDIR = os.path.expanduser("~/wavfiles")
+OUTDIR = os.path.expanduser("~/wav_files")
 os.makedirs(OUTDIR, exist_ok=True)
+FFMPEG_BIN = get_ffmpeg_binary()
 
 def temizle_null_sinks():
     result = subprocess.run(
@@ -178,7 +180,7 @@ def kayit_tek_satir(lecture_info):
 
     print(f"🎤 Kayıt başlıyor ({duration} sn)...")
     subprocess.call([
-        "ffmpeg", "-f", "pulse", "-i", monitor_name, "-t", str(duration),
+        FFMPEG_BIN, "-f", "pulse", "-i", monitor_name, "-t", str(duration),
         outfile, "-loglevel", "error"
     ])
 

@@ -1,2 +1,54 @@
-# .pyc dosyalarını hariç tut (takip et)
-*.pyc
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*.pyd
+
+# Virtual environments
+.env
+.venv
+.venv*/
+env/
+venv/
+ENV/
+Lib/
+Scripts/
+Include/
+pyvenv.cfg
+
+# Distribution / packaging
+.Python
+build/
+dist/
+develop-eggs/
+eggs/
+*.egg-info/
+.eggs/
+
+# Test / coverage
+.tox/
+.nox/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Type checking / linting caches
+.mypy_cache/
+.ruff_cache/
+.pytype/
+
+# Logs
+*.log
+
+# Local data/output
+downloads/
+transcripts/
+ffmpeg/
+
+# IDEs / editors
+.idea/
+.vscode/
+
+# OS files
+Thumbs.db
+Desktop.ini

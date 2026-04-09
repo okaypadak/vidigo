@@ -75,44 +75,55 @@
   </style>
 </head>
 <body>
-  <h2>🎙️ Udemy / YouTube / X.com Transkript Sistemi</h2>
+  <h2>Udemy / YouTube / X.com Transkript Sistemi</h2>
 
   <p id="gpuStatus">GPU durumu: kontrol ediliyor...</p>
 
   <div class="form-group">
-    <label>🔗 YouTube, X.com veya Udemy URL:</label>
-    <input type="text" id="videoUrl" placeholder="https://www.youtube.com/watch?v=... veya https://x.com/... " />
-  </div>
-
-  <div class="form-group">
-    <button id="scrapeBtn" onclick="scrapeUdemy()" style="display: none;">📋 1. Kazıma Yap</button>
-    <button id="downloadBtn" onclick="downloadYouTube()" style="display: none;">📥 1. İndir</button>
-  </div>
-
-  <div class="form-group">
-    <label>🎯 Bölüm Seç:</label>
-    <select id="sectionSelect">
-      <option disabled selected>Önce kazıma yapın</option>
-    </select>
-    <button onclick="recordUdemy()">🎙️ 2. Kayıt Yap</button>
-  </div>
-
-  <div class="form-group">
-    <label>📁 WAV Dosyası Seç (Transkripsiyon için):</label>
+    <label>YouTube, X.com veya Udemy URL:</label>
     <div style="display: flex; gap: 10px;">
-      <select id="wavFileList" style="flex: 1;">
-        <option disabled selected>Bir dosya seçin</option>
-      </select>
-      <button style="width: 50px;" onclick="loadWavFiles()">🔄</button>
+      <input type="text" id="videoUrl" placeholder="https://www.youtube.com/watch?v=... veya https://x.com/... " style="flex: 1;" />
+      <button id="downloadBtn" onclick="downloadYouTube()" style="width: 120px; display: none;">İndir</button>
+      <button id="downloadMp3Btn" onclick="downloadMp3()" style="width: 120px; display: none;">MP3 İndir</button>
     </div>
   </div>
 
   <div class="form-group">
-    <button onclick="transcribeWav()">📝 3. Transkript Al (Whisper)</button>
+    <label>Dosya yükle ve WAV'a çevir:</label>
+    <div style="display: flex; gap: 10px;">
+      <input type="file" id="localFileInput" accept="audio/*,video/*" style="flex: 1;" />
+      <button style="width: 120px;" onclick="uploadAndConvert()">Çevir</button>
+    </div>
   </div>
 
   <div class="form-group">
-    <label>🧾 Transkript:</label>
+    <button id="scrapeBtn" onclick="scrapeUdemy()" style="display: none;">1. Kazıma Yap</button>
+  </div>
+
+  <div class="form-group">
+    <label>Bölüm Seç:</label>
+    <select id="sectionSelect">
+      <option disabled selected>Önce kazıma yapın</option>
+    </select>
+    <button onclick="recordUdemy()">2. Kayıt Yap</button>
+  </div>
+
+  <div class="form-group">
+    <label>WAV Dosyası Seç (Transkripsiyon için):</label>
+    <div style="display: flex; gap: 10px;">
+      <select id="wavFileList" style="flex: 1;">
+        <option disabled selected>Bir dosya seçin</option>
+      </select>
+      <button style="width: 70px;" onclick="loadWavFiles()">Yenile</button>
+    </div>
+  </div>
+
+  <div class="form-group">
+    <button onclick="transcribeWav()">3. Transkript Al (Whisper)</button>
+  </div>
+
+  <div class="form-group">
+    <label>Transkript:</label>
     <textarea id="result" placeholder="Transkript burada görünecek..."></textarea>
   </div>
 
@@ -125,20 +136,26 @@
       try {
         const res = await fetch("/status");
         const data = await res.json();
-        document.getElementById("gpuStatus").innerText = data.gpu ? "GPU: ✅ Aktif" : "GPU: ❌ Pasif";
+        document.getElementById("gpuStatus").innerText = data.gpu ? "GPU: Aktif" : "GPU: Pasif";
       } catch {
-        document.getElementById("gpuStatus").innerText = "GPU: ❓ Bilgi alınamadı";
+        document.getElementById("gpuStatus").innerText = "GPU: Bilgi alınamadı";
       }
+    }
+
+    function isYouTubeUrl(url) {
+      return url.includes("youtube.com") || url.includes("youtu.be");
     }
 
     function checkUrlType() {
       const url = document.getElementById("videoUrl").value;
       const scrapeBtn = document.getElementById("scrapeBtn");
       const downloadBtn = document.getElementById("downloadBtn");
+      const downloadMp3Btn = document.getElementById("downloadMp3Btn");
 
       if (url.includes("udemy.com")) {
         scrapeBtn.style.display = "block";
         downloadBtn.style.display = "none";
+        downloadMp3Btn.style.display = "none";
       } else if (
         url.includes("youtube.com") ||
         url.includes("youtu.be") ||
@@ -147,9 +164,11 @@
       ) {
         scrapeBtn.style.display = "none";
         downloadBtn.style.display = "block";
+        downloadMp3Btn.style.display = isYouTubeUrl(url) ? "block" : "none";
       } else {
         scrapeBtn.style.display = "none";
         downloadBtn.style.display = "none";
+        downloadMp3Btn.style.display = "none";
       }
     }
 
@@ -166,16 +185,16 @@
       const url = document.getElementById("videoUrl").value;
       if (!url.includes("udemy.com")) return alert("Lütfen geçerli bir Udemy URL girin");
 
-      showToast("🔍 Kazıma başlatıldı...");
+      showToast("Kazıma başlatıldı...");
 
       await fetch("/udemy_scraper", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url })
-      }).then(r => r.json()).then(d => {
+      }).then(r => r.json()).then(() => {
         loadUdemySections();
         loadWavFiles();
-        showToast("✅ Kazıma tamamlandı.");
+        showToast("Kazıma tamamlandı.");
       });
     }
 
@@ -183,7 +202,30 @@
       const url = document.getElementById("videoUrl").value;
       if (!url) return;
 
-      showToast("📥 İndirme başlatıldı...");
+      if (isYouTubeUrl(url)) {
+        showToast("Transcript kontrol ediliyor...");
+        const transcriptRes = await fetch("/youtube_transcript", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url })
+        });
+        const transcriptData = await transcriptRes.json();
+        if (transcriptRes.ok && transcriptData.status === "found") {
+          const text = transcriptData.text || "";
+          document.getElementById("result").value = text;
+          showToast("Transcript bulundu ve indirildi.");
+          return;
+        }
+        if (transcriptRes.status === 404 || transcriptData.status === "missing") {
+          const proceed = confirm("Transcript bulunamadı. Ses indirilsin mi?");
+          if (!proceed) return;
+        } else if (transcriptData.error) {
+          showToast("Hata: " + transcriptData.error);
+          return;
+        }
+      }
+
+      showToast("İndirme başlatıldı...");
 
       await fetch("/download_audio", {
         method: "POST",
@@ -192,11 +234,60 @@
       }).then(r => r.json()).then(d => {
         loadWavFiles();
         if (d.error) {
-          showToast("🚫 Hata: " + d.error);
+          showToast("Hata: " + d.error);
         } else {
-          showToast("✅ İndirme tamamlandı.");
+          showToast("İndirme tamamlandı.");
         }
       });
+    }
+
+    async function downloadMp3() {
+      const url = document.getElementById("videoUrl").value;
+      if (!url) return;
+      if (!isYouTubeUrl(url)) {
+        showToast("MP3 indirme yalnızca YouTube için.");
+        return;
+      }
+
+      showToast("MP3 indiriliyor...");
+
+      try {
+        const res = await fetch("/download_mp3", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url })
+        });
+
+        if (!res.ok) {
+          let msg = "MP3 indirme başarısız.";
+          try {
+            const err = await res.json();
+            if (err.error) msg = "Hata: " + err.error;
+          } catch {}
+          showToast(msg);
+          return;
+        }
+
+        let filename = "audio.mp3";
+        const disposition = res.headers.get("Content-Disposition");
+        if (disposition) {
+          const match = disposition.match(/filename\*?=(?:UTF-8'')?"?([^;"]+)"?/i);
+          if (match) filename = decodeURIComponent(match[1]);
+        }
+
+        const blob = await res.blob();
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(link.href);
+
+        showToast("MP3 indirildi.");
+      } catch (e) {
+        showToast("Hata: " + e.message);
+      }
     }
 
     async function loadUdemySections() {
@@ -207,12 +298,12 @@
 
       const allOpt = document.createElement("option");
       allOpt.value = "__ALL__";
-      allOpt.innerText = "📚 Hepsi";
+      allOpt.innerText = "Hepsi";
       select.appendChild(allOpt);
 
       if (data.error) {
         const opt = document.createElement("option");
-        opt.innerText = "⚠️ " + data.error;
+        opt.innerText = data.error;
         select.appendChild(opt);
         return;
       }
@@ -229,16 +320,40 @@
       const url = document.getElementById("videoUrl").value;
       const selected = document.getElementById("sectionSelect").value;
 
-      showToast("🎙️ Kayıt başlatıldı...");
+      showToast("Kayıt başlatıldı...");
 
       await fetch("/udemy_record", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url, selected })
-      }).then(r => r.json()).then(d => {
+      }).then(r => r.json()).then(() => {
         loadWavFiles();
-        showToast("✅ Kayıt tamamlandı.");
+        showToast("Kayıt tamamlandı.");
       });
+    }
+
+    async function uploadAndConvert() {
+      const input = document.getElementById("localFileInput");
+      if (!input.files.length) return alert("Lütfen bir dosya seçin");
+
+      const formData = new FormData();
+      formData.append("file", input.files[0]);
+
+      showToast("Dosya yükleniyor ve dönüştürülüyor...");
+
+      const res = await fetch("/upload_convert", {
+        method: "POST",
+        body: formData
+      });
+      const data = await res.json();
+
+      if (res.ok && data.filename) {
+        input.value = "";
+        loadWavFiles();
+        showToast("Dönüştürme tamamlandı.");
+      } else {
+        showToast("Hata: " + (data.error || "Dönüştürme başarısız."));
+      }
     }
 
     async function loadWavFiles() {
@@ -268,8 +383,8 @@
       formData.append("engine", "whisper");
       formData.append("url", "wavfiles/" + file);
 
-      document.getElementById("result").value = "⏳ Transkript alınıyor...";
-      showToast("📝 Transkripsiyon başladı...");
+      document.getElementById("result").value = "Transkript alınıyor...";
+      showToast("Transkripsiyon başladı...");
 
       const res = await fetch("/transcribe", {
         method: "POST",
@@ -278,11 +393,11 @@
 
       const data = await res.json();
       if (data.error) {
-        document.getElementById("result").value = "❌ Hata: " + data.error;
-        showToast("🚫 Hata oluştu.");
+        document.getElementById("result").value = "Hata: " + data.error;
+        showToast("Hata oluştu.");
       } else {
         document.getElementById("result").value = data.transcript.text || JSON.stringify(data.transcript);
-        showToast("✅ Transkripsiyon tamamlandı.");
+        showToast("Transkripsiyon tamamlandı.");
       }
     }
 
