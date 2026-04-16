@@ -48,7 +48,7 @@ class Ui_Form(object):
 
     def retranslateUi(self, Form):
         _translate = QtCore.QCoreApplication.translate
-        Form.setWindowTitle(_translate("Form", "YouTube / Udemy Transcriber"))
+        Form.setWindowTitle(_translate("Form", "YouTube Transcriber"))
         self.label_url.setText(_translate("Form", "Video URL:"))
         self.label_engine.setText(_translate("Form", "Engine Secimi:"))
         self.engineSelect.setItemText(0, _translate("Form", "auto"))

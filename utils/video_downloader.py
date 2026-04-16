@@ -7,15 +7,20 @@ def sanitize_filename(name):
     return ''.join(c if c.isalnum() or c in (' ', '-', '_') else '_' for c in name).replace(' ', '_')
 
 
-def download_audio_generic(url, save_path="downloads", codec="wav"):
+def download_audio_generic(url, save_path="downloads", codec="mp3"):
     os.makedirs(save_path, exist_ok=True)
 
     ffmpeg_dir = get_ffmpeg_dir()
-    cookie_path = os.path.expanduser("~/cookie/x.com.txt") if "x.com" in url or "twitter.com" in url else None
-    if cookie_path and not os.path.isfile(cookie_path):
-        raise FileNotFoundError(f"Cookie file not found at {cookie_path}")
+    is_instagram = "instagram.com" in url
+    if is_instagram:
+        cookie_path = os.path.expanduser("~/cookie/instagram.com.txt")
+        if not os.path.isfile(cookie_path):
+            cookie_path = None  # cookie yoksa cookie'siz dene
+    else:
+        cookie_path = None
 
     is_youtube = "youtube.com" in url or "youtu.be" in url
+    is_instagram = "instagram.com" in url
 
     ydl_opts = {
         "quiet": True,
@@ -37,6 +42,9 @@ def download_audio_generic(url, save_path="downloads", codec="wav"):
         ydl_opts["extractor_args"] = {
             "youtube": {"player_client": ["android", "ios", "web"]}
         }
+
+    if is_instagram:
+        ydl_opts["http_headers"]["Referer"] = "https://www.instagram.com/"
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)
