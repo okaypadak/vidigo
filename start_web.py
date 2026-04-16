@@ -17,8 +17,10 @@ from utils.youtube_utils import extract_youtube_video_id
 
 app = Flask(__name__)
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.expanduser("~/")
 AUDIO_DIR = os.path.join(UPLOAD_DIR, "audiofiles")
+DOWNLOAD_DIR = os.path.join(BASE_DIR, "downloads")
 LOG_DIR = os.path.join(UPLOAD_DIR, "vidigo_logs")
 LOG_PATH = os.path.join(LOG_DIR, "app.log")
 
@@ -44,7 +46,7 @@ def _plain_transcript(transcript):
 
 
 def _download_mp3(url):
-    downloaded_path = download_audio_generic(url)
+    downloaded_path = download_audio_generic(url, save_path=DOWNLOAD_DIR)
     dest_path = os.path.join(AUDIO_DIR, os.path.basename(downloaded_path))
     shutil.move(downloaded_path, dest_path)
     return dest_path
