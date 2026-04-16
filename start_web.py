@@ -36,33 +36,11 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def _format_timestamp(seconds):
-    total_ms = max(int(round(float(seconds) * 1000)), 0)
-    hours, remainder = divmod(total_ms, 3600000)
-    minutes, remainder = divmod(remainder, 60000)
-    secs, millis = divmod(remainder, 1000)
-    if hours:
-        return f"{hours:02}:{minutes:02}:{secs:02}.{millis:03}"
-    return f"{minutes:02}:{secs:02}.{millis:03}"
-
-
-def _build_timestamped_transcript_text(transcript):
-    lines = []
-    for item in transcript:
-        text = (item.get("text") or "").strip()
-        if not text:
-            continue
-        start = item.get("start")
-        duration = item.get("duration")
-        if start is None:
-            lines.append(text)
-            continue
-        if duration is None:
-            lines.append(f"[{_format_timestamp(start)}] {text}")
-            continue
-        end = float(start) + float(duration)
-        lines.append(f"[{_format_timestamp(start)} - {_format_timestamp(end)}] {text}")
-    return "\n".join(lines).strip()
+def _plain_transcript(transcript):
+    return "\n".join(
+        (item.get("text") or "").strip()
+        for item in transcript if (item.get("text") or "").strip()
+    )
 
 
 def _download_mp3(url):
@@ -72,9 +50,23 @@ def _download_mp3(url):
     return dest_path
 
 
+def _whisper(dest_path):
+    result = transcribe_whisper(dest_path)
+    return result if isinstance(result, str) else str(result)
+
+
+def _youtube_api(video_id):
+    api = YouTubeTranscriptApi()
+    if hasattr(YouTubeTranscriptApi, "get_transcript"):
+        transcript = YouTubeTranscriptApi.get_transcript(video_id)
+    else:
+        fetched = api.fetch(video_id, languages=("tr", "en"))
+        transcript = fetched.to_raw_data()
+    return _plain_transcript(transcript), transcript
+
+
 @app.route("/", methods=["GET"])
 def index():
-    logger.info("Index page requested")
     return render_template("index.html")
 
 
@@ -92,7 +84,6 @@ def status():
 def instagram_transcribe():
     data = request.get_json()
     url = data.get("url", "").strip()
-    timestamps = data.get("timestamps", True)
 
     if not url or "instagram.com" not in url:
         return jsonify({"error": "Geçerli bir Instagram URL girin."}), 400
@@ -100,20 +91,17 @@ def instagram_transcribe():
     try:
         logger.info("Instagram download started: %s", url)
         dest_path = _download_mp3(url)
-        logger.info("Instagram audio saved: %s", dest_path)
     except Exception as e:
         logger.exception("Instagram download failed: %s", url)
         return jsonify({"error": f"İndirme hatası: {str(e)}"}), 500
 
     try:
-        logger.info("Whisper transcription started: %s", dest_path)
-        result = transcribe_whisper(dest_path, with_timestamps=timestamps)
-        save_transcript_to_file(str(uuid.uuid4())[:8], {"engine": "whisper", "transcript": result})
-        text = result.get("text", "") if isinstance(result, dict) else str(result)
-        logger.info("Whisper transcription done: %s", dest_path)
+        text = _whisper(dest_path)
+        save_transcript_to_file(str(uuid.uuid4())[:8], {"engine": "whisper", "transcript": text})
+        logger.info("Whisper done: %s", dest_path)
         return jsonify({"status": "success", "engine": "whisper", "text": text})
     except Exception as e:
-        logger.exception("Whisper transcription failed: %s", dest_path)
+        logger.exception("Whisper failed: %s", dest_path)
         return jsonify({"error": f"Transkript hatası: {str(e)}"}), 500
 
 
@@ -121,57 +109,104 @@ def instagram_transcribe():
 def youtube_transcribe():
     data = request.get_json()
     url = data.get("url", "").strip()
-    timestamps = data.get("timestamps", True)
 
     video_id = extract_youtube_video_id(url)
     if not video_id:
         return jsonify({"error": "Geçerli bir YouTube URL girin."}), 400
 
-    # 1. İndir
     try:
         logger.info("YouTube download started: %s", url)
         dest_path = _download_mp3(url)
-        logger.info("YouTube audio saved: %s", dest_path)
     except Exception as e:
         logger.exception("YouTube download failed: %s", url)
         return jsonify({"error": f"İndirme hatası: {str(e)}"}), 500
 
-    # 2. YouTube API dene
     try:
-        logger.info("YouTube transcript API requested for video_id=%s", video_id)
-        api = YouTubeTranscriptApi()
-        if hasattr(YouTubeTranscriptApi, "get_transcript"):
-            transcript = YouTubeTranscriptApi.get_transcript(video_id)
-        else:
-            fetched = api.fetch(video_id, languages=("tr", "en"))
-            transcript = fetched.to_raw_data()
-        text = _build_timestamped_transcript_text(transcript) if timestamps else "\n".join(
-            (item.get("text") or "").strip() for item in transcript if (item.get("text") or "").strip()
-        )
-        save_transcript_to_file(video_id, {
-            "engine": "youtube_transcript_api",
-            "video_id": video_id,
-            "text": text,
-            "transcript": transcript,
-        })
-        logger.info("YouTube API transcript found for video_id=%s", video_id)
+        text, transcript = _youtube_api(video_id)
+        save_transcript_to_file(video_id, {"engine": "youtube_api", "video_id": video_id, "text": text, "transcript": transcript})
+        logger.info("YouTube API transcript found: %s", video_id)
         return jsonify({"status": "success", "engine": "youtube_api", "text": text})
     except (NoTranscriptFound, TranscriptsDisabled, VideoUnavailable, CouldNotRetrieveTranscript):
-        logger.info("YouTube API transcript not found, falling back to Whisper: %s", dest_path)
-    except Exception as e:
-        logger.exception("YouTube API error for video_id=%s", video_id)
-        logger.info("Falling back to Whisper: %s", dest_path)
+        logger.info("YouTube API not found, falling back to Whisper: %s", dest_path)
+    except Exception:
+        logger.exception("YouTube API error: %s", video_id)
 
-    # 3. Whisper fallback
     try:
-        result = transcribe_whisper(dest_path, with_timestamps=timestamps)
-        save_transcript_to_file(str(uuid.uuid4())[:8], {"engine": "whisper", "transcript": result})
-        text = result.get("text", "") if isinstance(result, dict) else str(result)
+        text = _whisper(dest_path)
+        save_transcript_to_file(str(uuid.uuid4())[:8], {"engine": "whisper", "transcript": text})
         logger.info("Whisper fallback done: %s", dest_path)
         return jsonify({"status": "success", "engine": "whisper", "text": text})
     except Exception as e:
         logger.exception("Whisper fallback failed: %s", dest_path)
         return jsonify({"error": f"Transkript hatası: {str(e)}"}), 500
+
+
+@app.route("/batch_transcribe", methods=["POST"])
+def batch_transcribe():
+    data = request.get_json()
+    urls = data.get("urls", [])
+    profile = data.get("profile", "")
+
+    if not urls:
+        return jsonify({"error": "URL listesi boş."}), 400
+
+    results = []
+    for url in urls:
+        url = url.strip()
+        if not url:
+            continue
+        platform = "instagram" if "instagram.com" in url else "youtube"
+        entry = {"url": url, "platform": platform, "engine": None, "text": None, "status": "error", "error": None}
+
+        try:
+            dest_path = _download_mp3(url)
+        except Exception as e:
+            entry["error"] = f"İndirme hatası: {str(e)}"
+            logger.exception("Batch download failed: %s", url)
+            results.append(entry)
+            continue
+
+        if platform == "instagram":
+            try:
+                entry["text"] = _whisper(dest_path)
+                entry["engine"] = "whisper"
+                entry["status"] = "success"
+            except Exception as e:
+                entry["error"] = f"Whisper hatası: {str(e)}"
+        else:
+            video_id = extract_youtube_video_id(url)
+            api_ok = False
+            if video_id:
+                try:
+                    text, transcript = _youtube_api(video_id)
+                    entry["text"] = text
+                    entry["engine"] = "youtube_api"
+                    entry["status"] = "success"
+                    api_ok = True
+                except (NoTranscriptFound, TranscriptsDisabled, VideoUnavailable, CouldNotRetrieveTranscript):
+                    pass
+                except Exception:
+                    logger.exception("Batch YouTube API error: %s", video_id)
+
+            if not api_ok:
+                try:
+                    entry["text"] = _whisper(dest_path)
+                    entry["engine"] = "whisper"
+                    entry["status"] = "success"
+                except Exception as e:
+                    entry["error"] = f"Whisper hatası: {str(e)}"
+
+        results.append(entry)
+        logger.info("Batch [%s/%s]: %s", len(results), len(urls), url)
+
+    output = {
+        "profile": profile,
+        "processed_at": __import__("datetime").datetime.now().isoformat(),
+        "total": len(results),
+        "success": sum(1 for r in results if r["status"] == "success"),
+        "results": results,
+    }
+    return jsonify(output)
 
 
 if __name__ == "__main__":

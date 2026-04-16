@@ -28,7 +28,7 @@ def _format_timestamp(seconds):
     return f"{minutes:02}:{secs:02}.{millis:03}"
 
 
-def transcribe_whisper(audio_path, lang="tr", model_path="medium", with_timestamps=False):
+def transcribe_whisper(audio_path, lang="tr", model_path="medium"):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
 
@@ -46,24 +46,8 @@ def transcribe_whisper(audio_path, lang="tr", model_path="medium", with_timestam
             else:
                 result = model.transcribe(audio_path, language=lang, fp16=False)
 
-            transcribed_lines = []
-
-            for segment in result["segments"]:
-                text = segment["text"].strip()
-                if not text:
-                    continue
-                if with_timestamps:
-                    start_time = segment["start"]
-                    end_time = segment["end"]
-                    transcribed_lines.append(
-                        f"[{_format_timestamp(start_time)} - {_format_timestamp(end_time)}] {text}"
-                    )
-                else:
-                    transcribed_lines.append(text)
-
-            if with_timestamps:
-                return "\n".join(transcribed_lines).strip()
-            return " ".join(transcribed_lines).strip()
+            lines = [seg["text"].strip() for seg in result["segments"] if seg["text"].strip()]
+            return " ".join(lines).strip()
         except Exception as e:
             print(f"Transkripsiyon hatasi: {e}")
             return f"Transkripsiyon hatasi: {str(e)}"

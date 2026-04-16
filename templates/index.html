@@ -292,42 +292,20 @@
       flex: 0;
     }
 
-    /* toggle */
-    .toggle-row {
-      display: flex; align-items: center; gap: 10px;
-      margin-top: 14px;
-      font-size: 0.75rem; letter-spacing: 1.5px; text-transform: uppercase;
-      color: var(--muted);
-    }
-    .toggle {
-      position: relative; width: 36px; height: 20px; flex-shrink: 0;
-    }
-    .toggle input { opacity: 0; width: 0; height: 0; }
-    .toggle-slider {
-      position: absolute; inset: 0;
+    /* file upload */
+    .file-zone { display: flex; align-items: center; gap: 12px; }
+    .file-label {
+      flex: 1; display: flex; align-items: center; gap: 12px;
+      padding: 14px 16px;
       background: rgba(0,0,0,0.4);
-      border: 1px solid rgba(0,245,255,0.2);
-      border-radius: 20px;
-      cursor: pointer;
-      transition: background 0.2s, border-color 0.2s;
+      border: 1px dashed rgba(0,245,255,0.2);
+      border-radius: 2px; cursor: pointer;
+      color: var(--muted); font-size: 0.85rem;
+      transition: border-color 0.2s, color 0.2s;
     }
-    .toggle-slider::before {
-      content: '';
-      position: absolute;
-      width: 12px; height: 12px;
-      left: 3px; top: 3px;
-      background: var(--muted);
-      border-radius: 50%;
-      transition: transform 0.2s, background 0.2s;
-    }
-    .toggle input:checked + .toggle-slider {
-      background: rgba(0,245,255,0.12);
-      border-color: var(--cyan);
-    }
-    .toggle input:checked + .toggle-slider::before {
-      transform: translateX(16px);
-      background: var(--cyan);
-    }
+    .file-label:hover { border-color: var(--cyan); color: var(--cyan); }
+    .file-label span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    input[type="file"] { display: none; }
 
     /* platform badges */
     .badge-row { display: flex; gap: 8px; margin-top: 12px; }
@@ -519,14 +497,6 @@
       </span>
     </div>
 
-    <div class="toggle-row">
-      <label class="toggle">
-        <input type="checkbox" id="tsToggle" checked />
-        <span class="toggle-slider"></span>
-      </label>
-      Zaman Damgası
-    </div>
-
     <!-- YouTube -->
     <div class="btn-row" id="ytActionRow" style="display:none">
       <button class="btn btn-pink" onclick="youtubeTranscribe()">
@@ -553,11 +523,57 @@
     </div>
   </div>
 
-  <!-- PANEL 2: Result -->
+  <!-- PANEL 2: Batch -->
+  <div class="panel">
+    <div class="corner-br"></div>
+    <div class="panel-label">
+      <div class="panel-label-num">02</div>
+      Toplu İşlem — JSON
+    </div>
+
+    <div class="file-zone">
+      <label class="file-label" for="batchJsonInput">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/>
+        </svg>
+        <span id="batchFileLabel">JSON dosyası seç...</span>
+      </label>
+      <input type="file" id="batchJsonInput" accept=".json" onchange="loadBatchJson(this)" />
+    </div>
+
+    <div id="batchInfo" style="display:none; margin-top:12px; font-size:0.78rem; color:var(--muted); letter-spacing:1px;">
+      <span id="batchInfoText"></span>
+    </div>
+
+    <div class="btn-row" style="margin-top:14px;">
+      <button class="btn btn-green" id="batchStartBtn" onclick="startBatch()" disabled>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <polygon points="5 3 19 12 5 21 5 3"/>
+        </svg>
+        Başlat
+      </button>
+    </div>
+
+    <div class="progress-wrap" id="batchProgress">
+      <div class="progress-track"><div class="progress-bar"></div></div>
+      <div class="progress-label" id="batchProgressLabel">İşleniyor...</div>
+    </div>
+  </div>
+
+  <!-- PANEL 3: Result -->
   <div class="panel">
     <div class="corner-br"></div>
     <div class="result-head">
       <span class="result-title">// Output</span>
+      <div style="display:flex;gap:8px;align-items:center;">
+      <button class="btn btn-ghost" id="batchDownloadBtn" style="display:none;padding:8px 14px; font-size:0.72rem; letter-spacing:1px;" onclick="downloadBatchResult()">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+        </svg>
+        JSON
+      </button>
       <button class="btn btn-ghost" style="padding:8px 14px; font-size:0.72rem; letter-spacing:1px;" onclick="copyResult()">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
           <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
@@ -565,6 +581,7 @@
         </svg>
         COPY
       </button>
+      </div>
     </div>
     <textarea id="result" placeholder="> transkript çıktısı burada görünecek..."></textarea>
   </div>
@@ -630,12 +647,11 @@ let toastTimer;
     showToast(toastMsg);
     showProgress("urlProgress");
     document.getElementById("result").value = "";
-    const timestamps = document.getElementById("tsToggle").checked;
     try {
       const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url, timestamps })
+        body: JSON.stringify({ url })
       });
       const d = await res.json();
       hideProgress("urlProgress");
@@ -659,6 +675,106 @@ let toastTimer;
     const url = document.getElementById("videoUrl").value.trim();
     if (!url) return;
     _transcribeRequest("/youtube_transcribe", url, "YouTube indiriliyor...");
+  }
+
+  let batchData = null;
+  let batchResult = null;
+
+  function loadBatchJson(input) {
+    if (!input.files.length) return;
+    const file = input.files[0];
+    document.getElementById("batchFileLabel").textContent = file.name;
+    const reader = new FileReader();
+    reader.onload = e => {
+      try {
+        batchData = JSON.parse(e.target.result);
+        const count = (batchData.videos || []).length;
+        const profile = batchData.profile || "";
+        document.getElementById("batchInfoText").textContent =
+          `${profile ? profile + " · " : ""}${count} video`;
+        document.getElementById("batchInfo").style.display = "block";
+        document.getElementById("batchStartBtn").disabled = count === 0;
+      } catch {
+        showToast("Geçersiz JSON", "err");
+        batchData = null;
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  async function startBatch() {
+    if (!batchData) return;
+    const urls = batchData.videos || [];
+    if (!urls.length) return;
+    document.getElementById("batchStartBtn").disabled = true;
+    document.getElementById("batchDownloadBtn").style.display = "none";
+    document.getElementById("result").value = "";
+    showProgress("batchProgress");
+
+    const total = urls.length;
+    let done = 0;
+
+    const updateLabel = () => {
+      document.getElementById("batchProgressLabel").textContent =
+        `İşleniyor... ${done} / ${total}`;
+    };
+    updateLabel();
+
+    // Her URL'yi sırayla işle
+    const results = [];
+    for (const url of urls) {
+      const isYT = url.includes("youtube.com") || url.includes("youtu.be");
+      const endpoint = isYT ? "/youtube_transcribe" : "/instagram_transcribe";
+      try {
+        const res = await fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url })
+        });
+        const d = await res.json();
+        results.push({
+          url,
+          platform: isYT ? "youtube" : "instagram",
+          engine: d.engine || null,
+          text: d.text || null,
+          status: res.ok && !d.error ? "success" : "error",
+          error: d.error || null
+        });
+      } catch (e) {
+        results.push({ url, platform: isYT ? "youtube" : "instagram", engine: null, text: null, status: "error", error: e.message });
+      }
+      done++;
+      updateLabel();
+    }
+
+    hideProgress("batchProgress");
+    document.getElementById("batchStartBtn").disabled = false;
+
+    const success = results.filter(r => r.status === "success").length;
+    batchResult = {
+      profile: batchData.profile || "",
+      processed_at: new Date().toISOString(),
+      total: results.length,
+      success,
+      results
+    };
+
+    document.getElementById("result").value = JSON.stringify(batchResult, null, 2);
+    document.getElementById("batchDownloadBtn").style.display = "inline-flex";
+    showToast(`Tamamlandı: ${success}/${total}`, "ok");
+  }
+
+  function downloadBatchResult() {
+    if (!batchResult) return;
+    const blob = new Blob([JSON.stringify(batchResult, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    const profile = batchResult.profile || "batch";
+    a.href = URL.createObjectURL(blob);
+    a.download = `${profile}_transcripts.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(a.href);
   }
 
   checkGpuStatus();
