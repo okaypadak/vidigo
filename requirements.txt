@@ -5,3 +5,5 @@ youtube-transcript-api
 yt-dlp
 flask
 undetected_chromedriver
+tinydb
+instaloader
