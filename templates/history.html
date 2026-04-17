@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VIDIGO - Gecmis</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Space+Grotesk:wght@300;400;500;600;700&display=swap');
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --cyan: #00f5ff;
+      --pink: #ff0080;
+      --green: #00ff88;
+      --bg: #020408;
+      --glass: rgba(255,255,255,0.03);
+      --border: rgba(0,245,255,0.15);
+      --text: #e0f0ff;
+      --muted: rgba(150,200,220,0.5);
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Space Grotesk', sans-serif;
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    .bg-grid {
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      background-image:
+        linear-gradient(rgba(0,245,255,0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0,245,255,0.04) 1px, transparent 1px);
+      background-size: 60px 60px;
+      pointer-events: none;
+    }
+
+    .bg-orb {
+      position: fixed;
+      border-radius: 50%;
+      filter: blur(120px);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .bg-orb-1 {
+      width: 600px;
+      height: 600px;
+      background: radial-gradient(circle, rgba(0,245,255,0.08) 0%, transparent 70%);
+      top: -200px;
+      left: -200px;
+    }
+
+    .bg-orb-2 {
+      width: 500px;
+      height: 500px;
+      background: radial-gradient(circle, rgba(255,0,128,0.07) 0%, transparent 70%);
+      bottom: -150px;
+      right: -150px;
+    }
+
+    .wrap {
+      position: relative;
+      z-index: 1;
+      max-width: 920px;
+      margin: 0 auto;
+      padding: 56px 20px 96px;
+    }
+
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 14px;
+      flex-wrap: wrap;
+      margin-bottom: 24px;
+    }
+
+    .brand {
+      font-family: 'Orbitron', monospace;
+      font-weight: 900;
+      font-size: 2.1rem;
+      letter-spacing: 5px;
+      background: linear-gradient(90deg, var(--cyan), #fff, var(--pink));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .menu-bar {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .menu-btn {
+      padding: 10px 16px;
+      border: 1px solid var(--border);
+      background: var(--glass);
+      color: var(--muted);
+      border-radius: 999px;
+      font-family: 'Orbitron', monospace;
+      font-size: 0.68rem;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: border-color 0.2s, color 0.2s, box-shadow 0.2s;
+    }
+
+    .menu-btn:hover,
+    .menu-btn.active {
+      color: var(--cyan);
+      border-color: var(--cyan);
+      box-shadow: 0 0 18px rgba(0,245,255,0.18);
+    }
+
+    .panel {
+      position: relative;
+      background: var(--glass);
+      backdrop-filter: blur(20px);
+      border-radius: 2px;
+      border: 1px solid var(--border);
+      padding: 32px;
+      overflow: hidden;
+    }
+
+    .panel::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, var(--cyan), transparent);
+    }
+
+    .panel::after {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 20px;
+      height: 20px;
+      border-top: 2px solid var(--cyan);
+      border-left: 2px solid var(--cyan);
+    }
+
+    .corner-br {
+      position: absolute;
+      bottom: 0;
+      right: 0;
+      width: 20px;
+      height: 20px;
+      border-bottom: 2px solid var(--cyan);
+      border-right: 2px solid var(--cyan);
+      pointer-events: none;
+    }
+
+    .panel-label {
+      font-family: 'Orbitron', monospace;
+      font-size: 0.62rem;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      color: var(--cyan);
+      margin-bottom: 24px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .panel-label-num {
+      width: 22px;
+      height: 22px;
+      border: 1px solid var(--cyan);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.6rem;
+      color: var(--cyan);
+      flex-shrink: 0;
+    }
+
+    .toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-bottom: 18px;
+    }
+
+    .toolbar-text {
+      color: var(--muted);
+      font-size: 0.82rem;
+      letter-spacing: 1px;
+    }
+
+    .btn {
+      padding: 11px 16px;
+      border: 1px solid var(--border);
+      background: var(--glass);
+      color: var(--muted);
+      border-radius: 2px;
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 0.82rem;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: border-color 0.2s, color 0.2s, box-shadow 0.2s;
+    }
+
+    .btn:hover {
+      color: var(--cyan);
+      border-color: var(--cyan);
+      box-shadow: 0 0 18px rgba(0,245,255,0.18);
+    }
+
+    .history-list {
+      display: grid;
+      gap: 14px;
+    }
+
+    .history-empty {
+      padding: 18px;
+      border: 1px dashed rgba(0,245,255,0.18);
+      color: var(--muted);
+      font-size: 0.84rem;
+      background: rgba(0,0,0,0.25);
+    }
+
+    .history-card {
+      border: 1px solid rgba(0,245,255,0.14);
+      background: rgba(0,0,0,0.28);
+      padding: 16px;
+    }
+
+    .history-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+
+    .history-title {
+      color: var(--text);
+      font-weight: 600;
+      font-size: 0.96rem;
+      word-break: break-word;
+    }
+
+    .history-meta {
+      color: var(--muted);
+      font-size: 0.72rem;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+    }
+
+    .history-text {
+      color: #92ffd4;
+      font-family: 'Courier New', monospace;
+      font-size: 0.8rem;
+      line-height: 1.65;
+      white-space: pre-wrap;
+      background: rgba(0,0,0,0.25);
+      border: 1px solid rgba(0,245,255,0.08);
+      padding: 12px;
+      max-height: 220px;
+      overflow: auto;
+    }
+
+    .history-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 12px;
+    }
+
+    .toast {
+      position: fixed;
+      bottom: 32px;
+      left: 50%;
+      transform: translateX(-50%) translateY(20px);
+      padding: 12px 28px;
+      background: rgba(2,4,8,0.95);
+      border: 1px solid var(--border);
+      border-radius: 2px;
+      font-size: 0.82rem;
+      letter-spacing: 1px;
+      color: var(--cyan);
+      box-shadow: 0 0 30px rgba(0,245,255,0.15);
+      backdrop-filter: blur(20px);
+      opacity: 0;
+      transition: opacity 0.25s, transform 0.25s;
+      z-index: 9999;
+      white-space: nowrap;
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    @media (max-width: 640px) {
+      .wrap { padding: 32px 16px 72px; }
+      .panel { padding: 22px; }
+      .topbar { align-items: flex-start; }
+    }
+  </style>
+</head>
+<body>
+  <div class="bg-grid"></div>
+  <div class="bg-orb bg-orb-1"></div>
+  <div class="bg-orb bg-orb-2"></div>
+
+  <div class="wrap">
+    <div class="topbar">
+      <div class="brand">VIDIGO</div>
+      <div class="menu-bar">
+        <button class="menu-btn" onclick="window.location.href='/'">Ana Sayfa</button>
+        <button class="menu-btn active">Gecmis</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="corner-br"></div>
+      <div class="panel-label">
+        <div class="panel-label-num">01</div>
+        Gecmis
+      </div>
+
+      <div class="toolbar">
+        <div class="toolbar-text" id="historySummary">Kayitlar yukleniyor...</div>
+        <button class="btn" onclick="fetchHistory()">Yenile</button>
+      </div>
+
+      <div id="historyList" class="history-list">
+        <div class="history-empty">Henuz kayit bulunmuyor.</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <script>
+    let toastTimer;
+    let historyItems = [];
+
+    function showToast(msg) {
+      const t = document.getElementById("toast");
+      t.textContent = msg;
+      t.className = "toast show";
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => t.classList.remove("show"), 3000);
+    }
+
+    function escapeHtml(value) {
+      return String(value || "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#39;");
+    }
+
+    function formatHistoryDate(value) {
+      if (!value) return "Tarih yok";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return value;
+      return date.toLocaleString("tr-TR");
+    }
+
+    function renderHistory(items) {
+      historyItems = items || [];
+      const list = document.getElementById("historyList");
+      const summary = document.getElementById("historySummary");
+      summary.textContent = `${historyItems.length} kayit bulundu`;
+
+      if (!historyItems.length) {
+        list.innerHTML = `<div class="history-empty">Henuz kayit bulunmuyor.</div>`;
+        return;
+      }
+
+      list.innerHTML = historyItems.map((item, index) => {
+        const transcript = item.transcript || item.text || "";
+        const title = item.video_name || item.file_name || "Adsiz kayit";
+        const platform = item.platform || "bilinmiyor";
+        const engine = item.engine || "bilinmiyor";
+        return `
+          <div class="history-card">
+            <div class="history-head">
+              <div>
+                <div class="history-title">${escapeHtml(title)}</div>
+                <div class="history-meta">${escapeHtml(platform)} · ${escapeHtml(engine)} · ${escapeHtml(formatHistoryDate(item.created_at))}</div>
+              </div>
+            </div>
+            <div class="history-text" id="historyText${index}">${escapeHtml(transcript || "Transcript yok")}</div>
+            <div class="history-actions">
+              <button class="btn" onclick="copyHistoryTranscript(${index})">Kopyala</button>
+            </div>
+          </div>
+        `;
+      }).join("");
+    }
+
+    async function fetchHistory() {
+      const list = document.getElementById("historyList");
+      document.getElementById("historySummary").textContent = "Gecmis yukleniyor...";
+      list.innerHTML = `<div class="history-empty">Gecmis yukleniyor...</div>`;
+      try {
+        const res = await fetch("/history?limit=100");
+        const data = await res.json();
+        if (!res.ok || data.error) {
+          throw new Error(data.error || "Gecmis alinamadi");
+        }
+        renderHistory(data.items || []);
+      } catch (error) {
+        document.getElementById("historySummary").textContent = "Gecmis yuklenemedi";
+        list.innerHTML = `<div class="history-empty">${escapeHtml(error.message || "Gecmis alinamadi")}</div>`;
+      }
+    }
+
+    function copyHistoryTranscript(index) {
+      const item = historyItems[index];
+      if (!item) return;
+      const transcript = item.transcript || item.text || "";
+      if (!transcript) return;
+      navigator.clipboard.writeText(transcript).then(() => showToast("Transcript kopyalandi"));
+    }
+
+    fetchHistory();
+  </script>
+</body>
+</html>

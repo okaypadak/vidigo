@@ -13,7 +13,7 @@ from youtube_transcript_api import (
 )
 
 from transcribers.whisper_transcriber import transcribe_whisper
-from utils.file_utils import save_download_record, save_transcript_to_file
+from utils.file_utils import load_download_history, save_download_record, save_transcript_to_file
 from utils.video_downloader import build_unique_filepath, download_audio_generic
 from utils.youtube_utils import extract_youtube_video_id
 
@@ -118,6 +118,11 @@ def index():
     return render_template("index.html")
 
 
+@app.route("/history_page", methods=["GET"])
+def history_page():
+    return render_template("history.html")
+
+
 @app.route("/status", methods=["GET"])
 def status():
     try:
@@ -127,6 +132,17 @@ def status():
     except ImportError:
         gpu_available = False
     return jsonify({"gpu": gpu_available})
+
+
+@app.route("/history", methods=["GET"])
+def history():
+    try:
+        limit = request.args.get("limit", type=int)
+        records = load_download_history(limit=limit)
+        return jsonify({"items": records, "total": len(records)})
+    except Exception as e:
+        logger.exception("History load failed")
+        return jsonify({"error": f"Geçmiş yüklenemedi: {str(e)}"}), 500
 
 
 @app.route("/instagram_transcribe", methods=["POST"])

@@ -31,6 +31,14 @@ def save_download_record(video_name, transcript, **extra_fields):
     return record
 
 
+def load_download_history(limit=None):
+    records = download_db.all()
+    records.sort(key=lambda item: item.get("created_at", ""), reverse=True)
+    if limit is not None:
+        return records[:limit]
+    return records
+
+
 def load_transcript_from_file(video_id):
     path = get_transcript_filepath(video_id)
     if os.path.exists(path):
