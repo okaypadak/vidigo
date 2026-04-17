@@ -360,6 +360,45 @@
     .toast.ok { border-color: rgba(115, 255, 178, 0.55); color: var(--green); }
     .toast.err { border-color: rgba(255, 138, 138, 0.55); color: var(--warn); }
 
+    .log-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 14px;
+    }
+
+    .log-state {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border: 1px solid var(--line);
+      background: rgba(4, 10, 20, 0.76);
+      font-family: 'Orbitron', monospace;
+      font-size: 0.66rem;
+      letter-spacing: 0.08rem;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .log-console {
+      min-height: 260px;
+      max-height: 420px;
+      overflow: auto;
+      margin: 0;
+      padding: 16px;
+      border: 1px solid rgba(72, 243, 255, 0.16);
+      background: rgba(2, 6, 14, 0.92);
+      color: #d7f7ff;
+      font-family: Consolas, monospace;
+      font-size: 0.82rem;
+      line-height: 1.65;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
     @media (max-width: 640px) {
       .wrap { padding: 28px 14px 72px; }
       .panel, .panel-wide { padding: 18px; }
@@ -433,6 +472,18 @@
       <div class="eyebrow"><span>03</span> Cikti</div>
       <textarea id="result" placeholder="> indirme ozeti ve manifest detaylari burada gorunecek"></textarea>
     </section>
+
+    <section class="panel-wide" id="logPanel">
+      <div class="eyebrow"><span>04</span> Canli Log</div>
+      <div class="log-meta">
+        <div class="log-state">
+          <div class="dot" id="logDot"></div>
+          <span id="logStatus">LOG BEKLEMEDE</span>
+        </div>
+        <button class="btn btn-ghost" type="button" onclick="clearLiveLog()">Logu Temizle</button>
+      </div>
+      <pre id="liveLog" class="log-console">> python canli log akisi burada gorunecek</pre>
+    </section>
   </div>
 
   <div id="toast" class="toast"></div>
@@ -441,6 +492,8 @@
     let batchData = null;
     let batchResult = null;
     let toastTimer;
+    let liveLogSource = null;
+    let liveLogCloseTimer = null;
 
     async function checkGpuStatus() {
       try {
@@ -471,6 +524,71 @@
       document.getElementById("result").value = typeof data === "string" ? data : JSON.stringify(data, null, 2);
     }
 
+    function createOperationId() {
+      return `op-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    }
+
+    function setLogStatus(text, active = false) {
+      document.getElementById("logStatus").textContent = text;
+      document.getElementById("logDot").classList.toggle("on", active);
+    }
+
+    function appendLiveLog(line) {
+      const logBox = document.getElementById("liveLog");
+      if (!logBox.textContent || logBox.textContent.startsWith("> python canli log akisi")) {
+        logBox.textContent = line;
+      } else {
+        logBox.textContent += `\n${line}`;
+      }
+      logBox.scrollTop = logBox.scrollHeight;
+    }
+
+    function clearLiveLog() {
+      clearTimeout(liveLogCloseTimer);
+      if (liveLogSource) {
+        liveLogSource.close();
+        liveLogSource = null;
+      }
+      document.getElementById("liveLog").textContent = "> python canli log akisi burada gorunecek";
+      setLogStatus("LOG BEKLEMEDE");
+    }
+
+    function closeLiveLog(finalLabel = "LOG BEKLEMEDE") {
+      clearTimeout(liveLogCloseTimer);
+      if (liveLogSource) {
+        liveLogSource.close();
+        liveLogSource = null;
+      }
+      setLogStatus(finalLabel, false);
+    }
+
+    function startLiveLog(operationId) {
+      closeLiveLog("LOG BAGLANIYOR");
+      document.getElementById("liveLog").textContent = "";
+
+      const streamUrl = `/logs/stream?operation_id=${encodeURIComponent(operationId)}`;
+      liveLogSource = new EventSource(streamUrl);
+
+      liveLogSource.onopen = () => {
+        setLogStatus("CANLI LOG AKIYOR", true);
+      };
+
+      liveLogSource.onmessage = event => {
+        if (!event.data) return;
+        appendLiveLog(event.data);
+      };
+
+      liveLogSource.onerror = () => {
+        if (!liveLogSource) return;
+        setLogStatus("LOG BAGLANTISI YENILENIYOR", true);
+      };
+    }
+
+    function finishLiveLog(finalLabel) {
+      clearTimeout(liveLogCloseTimer);
+      liveLogCloseTimer = setTimeout(() => closeLiveLog(finalLabel), 1200);
+    }
+
     async function downloadSingle() {
       const url = document.getElementById("videoUrl").value.trim();
       if (!url) {
@@ -479,11 +597,16 @@
       }
 
       setResult("");
+      const operationId = createOperationId();
+      startLiveLog(operationId);
       showToast("Indirme basladi");
       try {
         const res = await fetch("/download_media", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            "X-Operation-Id": operationId
+          },
           body: JSON.stringify({ url })
         });
         const data = await res.json();
@@ -493,9 +616,11 @@
         batchResult = null;
         setResult(data);
         showToast(`Tamamlandi: ${data.item_count || 0} oge`, "ok");
+        finishLiveLog("ISLEM BITTI");
       } catch (error) {
         setResult({ error: error.message || "Indirme basarisiz" });
         showToast(error.message || "Indirme basarisiz", "err");
+        finishLiveLog("ISLEM HATA ILE BITTI");
       }
     }
 
@@ -548,12 +673,17 @@
       document.getElementById("batchStartBtn").disabled = true;
       document.getElementById("batchDownloadBtn").style.display = "none";
       setResult("");
+      const operationId = createOperationId();
+      startLiveLog(operationId);
       showToast("Toplu indirme basladi");
 
       try {
         const res = await fetch("/batch_download", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            "X-Operation-Id": operationId
+          },
           body: JSON.stringify({ urls: batchData.urls })
         });
         const data = await res.json();
@@ -569,9 +699,11 @@
         setResult(batchResult);
         document.getElementById("batchDownloadBtn").style.display = "inline-flex";
         showToast(`Tamamlandi: ${data.success}/${data.total}`, "ok");
+        finishLiveLog("ISLEM BITTI");
       } catch (error) {
         setResult({ error: error.message || "Toplu indirme basarisiz" });
         showToast(error.message || "Toplu indirme basarisiz", "err");
+        finishLiveLog("ISLEM HATA ILE BITTI");
       } finally {
         document.getElementById("batchStartBtn").disabled = false;
       }

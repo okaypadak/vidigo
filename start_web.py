@@ -1,9 +1,10 @@
 import logging
 import os
+import queue
 import shutil
 import uuid
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, Response, jsonify, render_template, request, stream_with_context
 from youtube_transcript_api import (
     CouldNotRetrieveTranscript,
     NoTranscriptFound,
@@ -13,6 +14,14 @@ from youtube_transcript_api import (
 )
 
 from transcribers.whisper_transcriber import transcribe_whisper
+from utils.app_logging import (
+    LOG_STREAM_HUB,
+    bind_operation,
+    configure_logging,
+    log_exception,
+    log_info,
+    log_warning,
+)
 from utils.download_service import batch_download_media, download_media
 from utils.file_utils import load_download_history, save_download_record, save_transcript_to_file
 from utils.video_downloader import build_unique_filepath, download_audio_generic
@@ -30,15 +39,24 @@ LOG_PATH = os.path.join(LOG_DIR, "app.log")
 os.makedirs(AUDIO_DIR, exist_ok=True)
 os.makedirs(LOG_DIR, exist_ok=True)
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
-    handlers=[
-        logging.FileHandler(LOG_PATH, encoding="utf-8"),
-        logging.StreamHandler(),
-    ],
-)
+configure_logging(LOG_PATH)
 logger = logging.getLogger(__name__)
+
+
+def _operation_id_from_request():
+    return (
+        (request.headers.get("X-Operation-Id") or "").strip()
+        or (request.args.get("operation_id") or "").strip()
+        or str(uuid.uuid4())[:8]
+    )
+
+
+def _json_response(payload, status=200, operation_id=None):
+    response = jsonify(payload)
+    response.status_code = status
+    if operation_id:
+        response.headers["X-Operation-Id"] = operation_id
+    return response
 
 
 def _plain_transcript(transcript):
@@ -50,26 +68,51 @@ def _plain_transcript(transcript):
 
 
 def _download_mp3(url):
+    log_info(logger, "Ses dosyasi hazirlama basladi", stage="audio.prepare", url=url, work_dir=DOWNLOAD_DIR)
     downloaded_path = download_audio_generic(url, save_path=DOWNLOAD_DIR)
     filename = os.path.basename(downloaded_path)
     stem, extension = os.path.splitext(filename)
     dest_path = build_unique_filepath(AUDIO_DIR, stem, extension)
     shutil.move(downloaded_path, dest_path)
+    log_info(
+        logger,
+        "Ses dosyasi calisma klasorune tasindi",
+        stage="audio.prepare",
+        source_path=downloaded_path,
+        dest_path=dest_path,
+    )
     return dest_path
 
 
 def _whisper(dest_path):
+    log_info(logger, "Whisper transkripsiyonu baslatiliyor", stage="transcribe.whisper", audio_path=dest_path)
     result = transcribe_whisper(dest_path)
-    return result if isinstance(result, str) else str(result)
+    text = result if isinstance(result, str) else str(result)
+    log_info(
+        logger,
+        "Whisper transkripsiyonu tamamlandi",
+        stage="transcribe.whisper",
+        audio_path=dest_path,
+        text_length=len(text),
+    )
+    return text
 
 
 def _youtube_api(video_id):
+    log_info(logger, "YouTube transcript API denemesi basladi", stage="transcribe.youtube_api", video_id=video_id)
     api = YouTubeTranscriptApi()
     if hasattr(YouTubeTranscriptApi, "get_transcript"):
         transcript = YouTubeTranscriptApi.get_transcript(video_id)
     else:
         fetched = api.fetch(video_id, languages=("tr", "en"))
         transcript = fetched.to_raw_data()
+    log_info(
+        logger,
+        "YouTube transcript API yaniti alindi",
+        stage="transcribe.youtube_api",
+        video_id=video_id,
+        line_count=len(transcript),
+    )
     return _plain_transcript(transcript), transcript
 
 
@@ -88,6 +131,15 @@ def _persist_transcript(
 ):
     video_name = _video_name_from_path(dest_path)
     transcript_id = video_id or str(uuid.uuid4())[:8]
+    log_info(
+        logger,
+        "Transkript kaydi hazirlaniyor",
+        stage="persist.transcript",
+        transcript_id=transcript_id,
+        video_name=video_name,
+        platform=platform,
+        engine=engine,
+    )
     payload = {
         "engine": engine,
         "platform": platform,
@@ -112,6 +164,13 @@ def _persist_transcript(
         file_name=os.path.basename(dest_path),
         file_path=dest_path,
     )
+    log_info(
+        logger,
+        "Transkript ve gecmis kaydi yazildi",
+        stage="persist.transcript",
+        transcript_id=transcript_id,
+        file_name=os.path.basename(dest_path),
+    )
 
 
 @app.route("/", methods=["GET"])
@@ -135,232 +194,326 @@ def status():
     return jsonify({"gpu": gpu_available})
 
 
+@app.route("/logs/stream", methods=["GET"])
+def stream_logs():
+    operation_id = (request.args.get("operation_id") or "").strip() or None
+    subscriber_id, subscriber_queue, backlog = LOG_STREAM_HUB.subscribe(operation_id=operation_id)
+
+    def generate():
+        try:
+            for line in backlog:
+                yield f"data: {line}\n\n"
+
+            while True:
+                try:
+                    line = subscriber_queue.get(timeout=15)
+                    yield f"data: {line}\n\n"
+                except queue.Empty:
+                    yield ": keepalive\n\n"
+        finally:
+            LOG_STREAM_HUB.unsubscribe(subscriber_id)
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @app.route("/history", methods=["GET"])
 def history():
+    operation_id = _operation_id_from_request()
     try:
-        limit = request.args.get("limit", type=int)
-        records = load_download_history(limit=limit)
-        return jsonify({"items": records, "total": len(records)})
-    except Exception as e:
-        logger.exception("History load failed")
-        return jsonify({"error": f"Geçmiş yüklenemedi: {str(e)}"}), 500
+        with bind_operation(operation_id):
+            limit = request.args.get("limit", type=int)
+            log_info(logger, "Gecmis kaydi yukleme istegi alindi", stage="history.load", limit=limit)
+            records = load_download_history(limit=limit)
+            log_info(logger, "Gecmis kayitlari yuklendi", stage="history.load", record_count=len(records))
+            return _json_response({"items": records, "total": len(records)}, operation_id=operation_id)
+    except Exception as exc:
+        with bind_operation(operation_id):
+            log_exception(logger, "Gecmis kayitlari yuklenemedi", stage="history.load")
+        return _json_response({"error": f"Gecmis yuklenemedi: {str(exc)}"}, status=500, operation_id=operation_id)
 
 
 @app.route("/download_media", methods=["POST"])
 def download_media_route():
+    operation_id = _operation_id_from_request()
     data = request.get_json(silent=True) or {}
     url = (data.get("url") or "").strip()
     cookie_path = (data.get("cookie_path") or "").strip() or None
 
     if not url:
-        return jsonify({"error": "Indirilecek URL gerekli."}), 400
+        return _json_response({"error": "Indirilecek URL gerekli."}, status=400, operation_id=operation_id)
 
     try:
-        logger.info("Media download started: %s", url)
-        payload = download_media(url, cookie_path=cookie_path)
-        logger.info("Media download completed: %s (%s item)", url, payload.get("item_count", 0))
-        return jsonify({"status": "success", **payload})
+        with bind_operation(operation_id):
+            log_info(logger, "Tekli indirme istegi alindi", stage="request.accepted", url=url, cookie_path=cookie_path or "auto")
+            payload = download_media(url, cookie_path=cookie_path)
+            log_info(
+                logger,
+                "Tekli indirme istegi tamamlandi",
+                stage="request.completed",
+                url=url,
+                item_count=payload.get("item_count", 0),
+            )
+            return _json_response({"status": "success", **payload}, operation_id=operation_id)
     except ValueError as exc:
-        logger.warning("Invalid download request: %s", url)
-        return jsonify({"error": str(exc)}), 400
+        with bind_operation(operation_id):
+            log_warning(logger, "Gecersiz indirme istegi", stage="request.validation", url=url, error=str(exc))
+        return _json_response({"error": str(exc)}, status=400, operation_id=operation_id)
     except Exception as exc:
-        logger.exception("Media download failed: %s", url)
-        return jsonify({"error": f"Indirme hatasi: {str(exc)}"}), 500
+        with bind_operation(operation_id):
+            log_exception(logger, "Tekli indirme akisi basarisiz oldu", stage="request.failed", url=url)
+        return _json_response({"error": f"Indirme hatasi: {str(exc)}"}, status=500, operation_id=operation_id)
 
 
 @app.route("/batch_download", methods=["POST"])
 def batch_download_route():
+    operation_id = _operation_id_from_request()
     data = request.get_json(silent=True) or {}
     urls = data.get("urls", [])
     cookie_path = (data.get("cookie_path") or "").strip() or None
 
     if not urls:
-        return jsonify({"error": "URL listesi bos."}), 400
+        return _json_response({"error": "URL listesi bos."}, status=400, operation_id=operation_id)
 
     try:
-        logger.info("Batch download started (%s urls)", len(urls))
-        payload = batch_download_media(urls, cookie_path=cookie_path)
-        logger.info("Batch download completed (%s/%s success)", payload.get("success"), payload.get("total"))
-        return jsonify(payload)
+        with bind_operation(operation_id):
+            log_info(
+                logger,
+                "Toplu indirme istegi alindi",
+                stage="request.accepted",
+                total_urls=len(urls),
+                cookie_path=cookie_path or "auto",
+            )
+            payload = batch_download_media(urls, cookie_path=cookie_path)
+            log_info(
+                logger,
+                "Toplu indirme tamamlandi",
+                stage="request.completed",
+                success=payload.get("success"),
+                total=payload.get("total"),
+            )
+            return _json_response(payload, operation_id=operation_id)
     except Exception as exc:
-        logger.exception("Batch download failed")
-        return jsonify({"error": f"Toplu indirme hatasi: {str(exc)}"}), 500
+        with bind_operation(operation_id):
+            log_exception(logger, "Toplu indirme akisi basarisiz oldu", stage="request.failed")
+        return _json_response({"error": f"Toplu indirme hatasi: {str(exc)}"}, status=500, operation_id=operation_id)
 
 
 @app.route("/instagram_transcribe", methods=["POST"])
 def instagram_transcribe():
-    data = request.get_json()
-    url = data.get("url", "").strip()
+    operation_id = _operation_id_from_request()
+    data = request.get_json(silent=True) or {}
+    url = (data.get("url") or "").strip()
 
     if not url or "instagram.com" not in url:
-        return jsonify({"error": "Geçerli bir Instagram URL girin."}), 400
+        return _json_response({"error": "Gecerli bir Instagram URL girin."}, status=400, operation_id=operation_id)
 
     try:
-        logger.info("Instagram download started: %s", url)
-        dest_path = _download_mp3(url)
-    except Exception as e:
-        logger.exception("Instagram download failed: %s", url)
-        return jsonify({"error": f"İndirme hatası: {str(e)}"}), 500
+        with bind_operation(operation_id):
+            log_info(logger, "Instagram transkripsiyon istegi alindi", stage="request.accepted", url=url)
+            dest_path = _download_mp3(url)
+    except Exception as exc:
+        with bind_operation(operation_id):
+            log_exception(logger, "Instagram icin ses hazirlama basarisiz oldu", stage="request.failed", url=url)
+        return _json_response({"error": f"Indirme hatasi: {str(exc)}"}, status=500, operation_id=operation_id)
 
     try:
-        text = _whisper(dest_path)
-        _persist_transcript(dest_path, url, "instagram", "whisper", text)
-        logger.info("Whisper done: %s", dest_path)
-        return jsonify({"status": "success", "engine": "whisper", "text": text})
-    except Exception as e:
-        logger.exception("Whisper failed: %s", dest_path)
-        return jsonify({"error": f"Transkript hatası: {str(e)}"}), 500
+        with bind_operation(operation_id):
+            text = _whisper(dest_path)
+            _persist_transcript(dest_path, url, "instagram", "whisper", text)
+            log_info(logger, "Instagram transkripsiyonu tamamlandi", stage="request.completed", audio_path=dest_path)
+            return _json_response({"status": "success", "engine": "whisper", "text": text}, operation_id=operation_id)
+    except Exception as exc:
+        with bind_operation(operation_id):
+            log_exception(logger, "Instagram Whisper transkripsiyonu basarisiz oldu", stage="request.failed", audio_path=dest_path)
+        return _json_response({"error": f"Transkript hatasi: {str(exc)}"}, status=500, operation_id=operation_id)
 
 
 @app.route("/youtube_transcribe", methods=["POST"])
 def youtube_transcribe():
-    data = request.get_json()
-    url = data.get("url", "").strip()
+    operation_id = _operation_id_from_request()
+    data = request.get_json(silent=True) or {}
+    url = (data.get("url") or "").strip()
 
     video_id = extract_youtube_video_id(url)
     if not video_id:
-        return jsonify({"error": "Geçerli bir YouTube URL girin."}), 400
+        return _json_response({"error": "Gecerli bir YouTube URL girin."}, status=400, operation_id=operation_id)
 
     try:
-        logger.info("YouTube download started: %s", url)
-        dest_path = _download_mp3(url)
-    except Exception as e:
-        logger.exception("YouTube download failed: %s", url)
-        return jsonify({"error": f"İndirme hatası: {str(e)}"}), 500
+        with bind_operation(operation_id):
+            log_info(logger, "YouTube transkripsiyon istegi alindi", stage="request.accepted", url=url, video_id=video_id)
+            dest_path = _download_mp3(url)
+    except Exception as exc:
+        with bind_operation(operation_id):
+            log_exception(logger, "YouTube icin ses hazirlama basarisiz oldu", stage="request.failed", url=url)
+        return _json_response({"error": f"Indirme hatasi: {str(exc)}"}, status=500, operation_id=operation_id)
 
     try:
-        text, transcript = _youtube_api(video_id)
-        _persist_transcript(
-            dest_path,
-            url,
-            "youtube",
-            "youtube_api",
-            text,
-            video_id=video_id,
-            transcript_payload=transcript,
-        )
-        logger.info("YouTube API transcript found: %s", video_id)
-        return jsonify({"status": "success", "engine": "youtube_api", "text": text})
+        with bind_operation(operation_id):
+            text, transcript = _youtube_api(video_id)
+            _persist_transcript(
+                dest_path,
+                url,
+                "youtube",
+                "youtube_api",
+                text,
+                video_id=video_id,
+                transcript_payload=transcript,
+            )
+            log_info(logger, "YouTube transcript API ile transkript bulundu", stage="request.completed", video_id=video_id)
+            return _json_response({"status": "success", "engine": "youtube_api", "text": text}, operation_id=operation_id)
     except (
         NoTranscriptFound,
         TranscriptsDisabled,
         VideoUnavailable,
         CouldNotRetrieveTranscript,
     ):
-        logger.info("YouTube API not found, falling back to Whisper: %s", dest_path)
+        with bind_operation(operation_id):
+            log_info(
+                logger,
+                "YouTube transcript API sonuc vermedi, Whisper'a geciliyor",
+                stage="transcribe.fallback",
+                audio_path=dest_path,
+                video_id=video_id,
+            )
     except Exception:
-        logger.exception("YouTube API error: %s", video_id)
+        with bind_operation(operation_id):
+            log_exception(logger, "YouTube transcript API beklenmeyen hata verdi", stage="transcribe.youtube_api", video_id=video_id)
 
     try:
-        text = _whisper(dest_path)
-        _persist_transcript(dest_path, url, "youtube", "whisper", text, video_id=video_id)
-        logger.info("Whisper fallback done: %s", dest_path)
-        return jsonify({"status": "success", "engine": "whisper", "text": text})
-    except Exception as e:
-        logger.exception("Whisper fallback failed: %s", dest_path)
-        return jsonify({"error": f"Transkript hatası: {str(e)}"}), 500
+        with bind_operation(operation_id):
+            text = _whisper(dest_path)
+            _persist_transcript(dest_path, url, "youtube", "whisper", text, video_id=video_id)
+            log_info(logger, "Whisper fallback tamamlandi", stage="request.completed", audio_path=dest_path, video_id=video_id)
+            return _json_response({"status": "success", "engine": "whisper", "text": text}, operation_id=operation_id)
+    except Exception as exc:
+        with bind_operation(operation_id):
+            log_exception(logger, "Whisper fallback basarisiz oldu", stage="request.failed", audio_path=dest_path, video_id=video_id)
+        return _json_response({"error": f"Transkript hatasi: {str(exc)}"}, status=500, operation_id=operation_id)
 
 
 @app.route("/batch_transcribe", methods=["POST"])
 def batch_transcribe():
-    data = request.get_json()
+    operation_id = _operation_id_from_request()
+    data = request.get_json(silent=True) or {}
     urls = data.get("urls", [])
     profile = data.get("profile", "")
 
     if not urls:
-        return jsonify({"error": "URL listesi boş."}), 400
+        return _json_response({"error": "URL listesi bos."}, status=400, operation_id=operation_id)
 
-    results = []
-    for url in urls:
-        url = url.strip()
-        if not url:
-            continue
+    with bind_operation(operation_id):
+        log_info(logger, "Toplu transkripsiyon istegi alindi", stage="request.accepted", total_urls=len(urls), profile=profile or "-")
+        results = []
+        for index, url in enumerate(urls, start=1):
+            url = url.strip()
+            if not url:
+                continue
 
-        platform = "instagram" if "instagram.com" in url else "youtube"
-        entry = {
-            "url": url,
-            "platform": platform,
-            "engine": None,
-            "text": None,
-            "status": "error",
-            "error": None,
-        }
+            platform = "instagram" if "instagram.com" in url else "youtube"
+            entry = {
+                "url": url,
+                "platform": platform,
+                "engine": None,
+                "text": None,
+                "status": "error",
+                "error": None,
+            }
+            log_info(logger, "Toplu transkripsiyon girdisi isleniyor", stage="batch.item.start", index=index, total=len(urls), url=url, platform=platform)
 
-        try:
-            dest_path = _download_mp3(url)
-        except Exception as e:
-            entry["error"] = f"İndirme hatası: {str(e)}"
-            logger.exception("Batch download failed: %s", url)
-            results.append(entry)
-            continue
-
-        if platform == "instagram":
             try:
-                entry["text"] = _whisper(dest_path)
-                entry["engine"] = "whisper"
-                entry["status"] = "success"
-                _persist_transcript(dest_path, url, platform, entry["engine"], entry["text"])
-            except Exception as e:
-                entry["error"] = f"Whisper hatası: {str(e)}"
-        else:
-            video_id = extract_youtube_video_id(url)
-            api_ok = False
+                dest_path = _download_mp3(url)
+            except Exception as exc:
+                entry["error"] = f"Indirme hatasi: {str(exc)}"
+                log_exception(logger, "Toplu transkripsiyon icin ses hazirlama basarisiz oldu", stage="batch.item.download", url=url)
+                results.append(entry)
+                continue
 
-            if video_id:
-                try:
-                    text, transcript = _youtube_api(video_id)
-                    entry["text"] = text
-                    entry["engine"] = "youtube_api"
-                    entry["status"] = "success"
-                    _persist_transcript(
-                        dest_path,
-                        url,
-                        platform,
-                        entry["engine"],
-                        entry["text"],
-                        video_id=video_id,
-                        transcript_payload=transcript,
-                    )
-                    api_ok = True
-                except (
-                    NoTranscriptFound,
-                    TranscriptsDisabled,
-                    VideoUnavailable,
-                    CouldNotRetrieveTranscript,
-                ):
-                    pass
-                except Exception:
-                    logger.exception("Batch YouTube API error: %s", video_id)
-
-            if not api_ok:
+            if platform == "instagram":
                 try:
                     entry["text"] = _whisper(dest_path)
                     entry["engine"] = "whisper"
                     entry["status"] = "success"
-                    _persist_transcript(
-                        dest_path,
-                        url,
-                        platform,
-                        entry["engine"],
-                        entry["text"],
-                        video_id=video_id,
-                    )
-                except Exception as e:
-                    entry["error"] = f"Whisper hatası: {str(e)}"
+                    _persist_transcript(dest_path, url, platform, entry["engine"], entry["text"])
+                except Exception as exc:
+                    entry["error"] = f"Whisper hatasi: {str(exc)}"
+                    log_exception(logger, "Instagram batch Whisper basarisiz oldu", stage="batch.item.transcribe", url=url, audio_path=dest_path)
+            else:
+                video_id = extract_youtube_video_id(url)
+                api_ok = False
 
-        results.append(entry)
-        logger.info("Batch [%s/%s]: %s", len(results), len(urls), url)
+                if video_id:
+                    try:
+                        text, transcript = _youtube_api(video_id)
+                        entry["text"] = text
+                        entry["engine"] = "youtube_api"
+                        entry["status"] = "success"
+                        _persist_transcript(
+                            dest_path,
+                            url,
+                            platform,
+                            entry["engine"],
+                            entry["text"],
+                            video_id=video_id,
+                            transcript_payload=transcript,
+                        )
+                        api_ok = True
+                    except (
+                        NoTranscriptFound,
+                        TranscriptsDisabled,
+                        VideoUnavailable,
+                        CouldNotRetrieveTranscript,
+                    ):
+                        log_info(logger, "Batch YouTube transcript API sonuc vermedi, Whisper'a geciliyor", stage="batch.item.fallback", video_id=video_id, url=url)
+                    except Exception:
+                        log_exception(logger, "Batch YouTube transcript API beklenmeyen hata verdi", stage="batch.item.youtube_api", video_id=video_id, url=url)
 
-    output = {
-        "profile": profile,
-        "processed_at": __import__("datetime").datetime.now().isoformat(),
-        "total": len(results),
-        "success": sum(1 for r in results if r["status"] == "success"),
-        "results": results,
-    }
-    return jsonify(output)
+                if not api_ok:
+                    try:
+                        entry["text"] = _whisper(dest_path)
+                        entry["engine"] = "whisper"
+                        entry["status"] = "success"
+                        _persist_transcript(
+                            dest_path,
+                            url,
+                            platform,
+                            entry["engine"],
+                            entry["text"],
+                            video_id=video_id,
+                        )
+                    except Exception as exc:
+                        entry["error"] = f"Whisper hatasi: {str(exc)}"
+                        log_exception(logger, "Batch Whisper transkripsiyonu basarisiz oldu", stage="batch.item.transcribe", url=url, audio_path=dest_path)
+
+            results.append(entry)
+            log_info(
+                logger,
+                "Toplu transkripsiyon girdisi tamamlandi",
+                stage="batch.item.done",
+                index=len(results),
+                total=len(urls),
+                url=url,
+                status=entry["status"],
+                engine=entry["engine"] or "-",
+            )
+
+        output = {
+            "profile": profile,
+            "processed_at": __import__("datetime").datetime.now().isoformat(),
+            "total": len(results),
+            "success": sum(1 for result in results if result["status"] == "success"),
+            "results": results,
+        }
+        log_info(logger, "Toplu transkripsiyon tamamlandi", stage="request.completed", success=output["success"], total=output["total"])
+        return _json_response(output, operation_id=operation_id)
 
 
 if __name__ == "__main__":
-    logger.info("Starting Flask development server")
+    log_info(logger, "Flask gelistirme sunucusu baslatiliyor", stage="startup", host="127.0.0.1", port=5000)
     app.run(debug=True)
