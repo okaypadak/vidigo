@@ -5,529 +5,351 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>VIDIGO</title>
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Space+Grotesk:wght@300;400;500;600;700&display=swap');
-
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+    @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Space+Grotesk:wght@400;500;700&display=swap');
 
     :root {
-      --cyan: #00f5ff;
-      --cyan-dim: rgba(0,245,255,0.15);
-      --pink: #ff0080;
-      --green: #00ff88;
-      --bg: #020408;
-      --glass: rgba(255,255,255,0.03);
-      --border: rgba(0,245,255,0.15);
-      --text: #e0f0ff;
-      --muted: rgba(150,200,220,0.5);
+      --bg: #030711;
+      --panel: rgba(9, 16, 30, 0.82);
+      --panel-2: rgba(5, 10, 20, 0.72);
+      --line: rgba(0, 245, 255, 0.18);
+      --cyan: #48f3ff;
+      --pink: #ff5ca9;
+      --green: #73ffb2;
+      --text: #e7f6ff;
+      --muted: #88a4b6;
+      --warn: #ff8a8a;
+      --shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
     }
 
-    html { scroll-behavior: smooth; }
+    * { box-sizing: border-box; }
 
     body {
-      background: var(--bg);
-      color: var(--text);
-      font-family: 'Space Grotesk', sans-serif;
+      margin: 0;
       min-height: 100vh;
-      overflow-x: hidden;
+      font-family: 'Space Grotesk', sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(72, 243, 255, 0.12), transparent 28%),
+        radial-gradient(circle at bottom right, rgba(255, 92, 169, 0.12), transparent 24%),
+        linear-gradient(180deg, #040814, #02050c 55%, #010308);
     }
 
-    .bg-grid {
+    body::before {
+      content: "";
       position: fixed;
       inset: 0;
-      z-index: 0;
       background-image:
-        linear-gradient(rgba(0,245,255,0.04) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(0,245,255,0.04) 1px, transparent 1px);
-      background-size: 60px 60px;
+        linear-gradient(rgba(72, 243, 255, 0.05) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(72, 243, 255, 0.05) 1px, transparent 1px);
+      background-size: 56px 56px;
       pointer-events: none;
     }
-
-    .bg-orb {
-      position: fixed;
-      border-radius: 50%;
-      filter: blur(120px);
-      pointer-events: none;
-      z-index: 0;
-    }
-
-    .bg-orb-1 {
-      width: 600px;
-      height: 600px;
-      background: radial-gradient(circle, rgba(0,245,255,0.08) 0%, transparent 70%);
-      top: -200px;
-      left: -200px;
-      animation: drift1 12s ease-in-out infinite alternate;
-    }
-
-    .bg-orb-2 {
-      width: 500px;
-      height: 500px;
-      background: radial-gradient(circle, rgba(255,0,128,0.07) 0%, transparent 70%);
-      bottom: -150px;
-      right: -150px;
-      animation: drift2 14s ease-in-out infinite alternate;
-    }
-
-    @keyframes drift1 { to { transform: translate(60px, 60px); } }
-    @keyframes drift2 { to { transform: translate(-60px, -60px); } }
 
     .wrap {
       position: relative;
       z-index: 1;
-      max-width: 760px;
+      max-width: 980px;
       margin: 0 auto;
-      padding: 56px 20px 96px;
+      padding: 42px 18px 90px;
     }
 
-    .logo {
-      font-family: 'Orbitron', monospace;
-      font-weight: 900;
-      font-size: 3.6rem;
-      letter-spacing: 8px;
-      text-align: center;
-      background: linear-gradient(90deg, var(--cyan), #fff, var(--pink));
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
-      filter: drop-shadow(0 0 30px rgba(0,245,255,0.5));
-    }
-
-    .tagline {
-      text-align: center;
-      margin-top: 10px;
-      font-size: 0.78rem;
-      letter-spacing: 4px;
-      text-transform: uppercase;
-      color: var(--muted);
-    }
-
-    .status-bar {
-      display: flex;
-      justify-content: center;
-      margin-top: 24px;
+    .hero {
       margin-bottom: 22px;
     }
 
-    .status-pill {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      padding: 6px 18px;
-      border: 1px solid var(--border);
-      border-radius: 99px;
-      background: var(--glass);
-      font-size: 0.72rem;
-      letter-spacing: 2px;
-      text-transform: uppercase;
-      color: var(--muted);
-      backdrop-filter: blur(10px);
-    }
-
-    .pulse-dot {
-      width: 7px;
-      height: 7px;
-      border-radius: 50%;
-      background: #333;
-      transition: background 0.3s, box-shadow 0.3s;
-    }
-
-    .pulse-dot.on {
-      background: var(--green);
-      box-shadow: 0 0 8px var(--green), 0 0 20px var(--green);
-      animation: pulse 2s ease-in-out infinite;
-    }
-
-    @keyframes pulse {
-      0%, 100% { box-shadow: 0 0 8px var(--green), 0 0 20px var(--green); }
-      50% { box-shadow: 0 0 4px var(--green), 0 0 8px var(--green); }
-    }
-
-    .menu-bar {
-      display: flex;
-      gap: 10px;
-      justify-content: center;
-      flex-wrap: wrap;
-      margin-bottom: 28px;
-    }
-
-    .menu-btn {
-      padding: 10px 16px;
-      border: 1px solid var(--border);
-      background: var(--glass);
-      color: var(--muted);
-      border-radius: 999px;
+    .brand {
       font-family: 'Orbitron', monospace;
-      font-size: 0.68rem;
-      letter-spacing: 2px;
-      text-transform: uppercase;
+      font-weight: 900;
+      font-size: clamp(2.6rem, 7vw, 4.4rem);
+      letter-spacing: 0.28rem;
+      margin: 0;
+      background: linear-gradient(90deg, var(--cyan), #ffffff, var(--pink));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      filter: drop-shadow(0 0 26px rgba(72, 243, 255, 0.28));
+    }
+
+    .sub {
+      margin-top: 10px;
+      color: var(--muted);
+      max-width: 760px;
+      line-height: 1.65;
+      font-size: 0.96rem;
+    }
+
+    .nav {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin: 18px 0 26px;
+    }
+
+    .nav a,
+    .nav button {
+      border: 1px solid var(--line);
+      background: rgba(8, 14, 28, 0.74);
+      color: var(--text);
+      border-radius: 999px;
+      padding: 10px 16px;
+      text-decoration: none;
       cursor: pointer;
-      transition: border-color 0.2s, color 0.2s, box-shadow 0.2s;
+      font-family: 'Orbitron', monospace;
+      font-size: 0.72rem;
+      letter-spacing: 0.12rem;
+      text-transform: uppercase;
+      transition: 0.2s ease;
     }
 
-    .menu-btn:hover,
-    .menu-btn.active {
-      color: var(--cyan);
+    .nav a:hover,
+    .nav button:hover {
       border-color: var(--cyan);
-      box-shadow: 0 0 18px rgba(0,245,255,0.18);
+      color: var(--cyan);
+      box-shadow: 0 0 24px rgba(72, 243, 255, 0.16);
     }
 
-    .panel {
+    .panel-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 18px;
+      align-items: start;
+    }
+
+    .panel,
+    .panel-wide {
       position: relative;
-      background: var(--glass);
-      backdrop-filter: blur(20px);
-      border-radius: 2px;
-      border: 1px solid var(--border);
-      padding: 32px;
-      margin-bottom: 24px;
+      background: linear-gradient(180deg, var(--panel), var(--panel-2));
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow);
       overflow: hidden;
     }
 
-    .panel::before {
-      content: '';
+    .panel::before,
+    .panel-wide::before {
+      content: "";
       position: absolute;
-      top: 0;
       left: 0;
       right: 0;
+      top: 0;
       height: 1px;
       background: linear-gradient(90deg, transparent, var(--cyan), transparent);
     }
 
-    .panel::after {
-      content: '';
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 20px;
-      height: 20px;
-      border-top: 2px solid var(--cyan);
-      border-left: 2px solid var(--cyan);
+    .panel {
+      padding: 22px;
+      min-height: 100%;
     }
 
-    .corner-br {
-      position: absolute;
-      bottom: 0;
-      right: 0;
-      width: 20px;
-      height: 20px;
-      border-bottom: 2px solid var(--cyan);
-      border-right: 2px solid var(--cyan);
-      pointer-events: none;
+    .panel-wide {
+      margin-top: 18px;
+      padding: 22px;
     }
 
-    .panel-label {
-      font-family: 'Orbitron', monospace;
-      font-size: 0.62rem;
-      letter-spacing: 3px;
-      text-transform: uppercase;
-      color: var(--cyan);
-      margin-bottom: 24px;
-      display: flex;
+    .eyebrow {
+      display: inline-flex;
       align-items: center;
       gap: 10px;
-    }
-
-    .panel-label-num {
-      width: 22px;
-      height: 22px;
-      border: 1px solid var(--cyan);
-      border-radius: 50%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 0.6rem;
+      margin-bottom: 18px;
+      font-family: 'Orbitron', monospace;
+      font-size: 0.74rem;
+      letter-spacing: 0.12rem;
+      text-transform: uppercase;
       color: var(--cyan);
-      flex-shrink: 0;
     }
 
-    .input-wrap {
-      position: relative;
-    }
-
-    .input-wrap svg.icon {
-      position: absolute;
-      left: 16px;
-      top: 50%;
-      transform: translateY(-50%);
-      color: var(--muted);
-      pointer-events: none;
-    }
-
-    input[type="text"] {
-      width: 100%;
-      background: rgba(0,0,0,0.4);
-      border: 1px solid rgba(0,245,255,0.2);
-      border-radius: 2px;
-      color: var(--text);
-      font-family: 'Space Grotesk', sans-serif;
-      font-size: 0.95rem;
-      padding: 15px 16px 15px 46px;
-      outline: none;
-      transition: border-color 0.2s, box-shadow 0.2s;
-      letter-spacing: 0.5px;
-    }
-
-    input[type="text"]:focus {
-      border-color: var(--cyan);
-      box-shadow: 0 0 0 1px var(--cyan), 0 0 20px var(--cyan-dim), inset 0 0 20px rgba(0,245,255,0.03);
-    }
-
-    input[type="text"]::placeholder {
-      color: var(--muted);
-      font-size: 0.85rem;
-    }
-
-    .btn-row {
-      display: flex;
-      gap: 12px;
-      margin-top: 14px;
-      flex-wrap: wrap;
-    }
-
-    .btn {
-      flex: 1;
-      min-width: 130px;
+    .eyebrow span {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      gap: 8px;
-      padding: 13px 20px;
-      border: none;
-      border-radius: 2px;
-      font-family: 'Space Grotesk', sans-serif;
-      font-size: 0.85rem;
-      font-weight: 600;
-      letter-spacing: 1px;
-      text-transform: uppercase;
-      cursor: pointer;
-      position: relative;
-      overflow: hidden;
-      transition: transform 0.1s, box-shadow 0.2s;
+      width: 24px;
+      height: 24px;
+      border: 1px solid var(--cyan);
+      border-radius: 50%;
+      font-size: 0.68rem;
     }
 
-    .btn:active { transform: scale(0.97); }
-
-    .btn::before {
-      content: '';
-      position: absolute;
-      inset: 0;
-      background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.08) 50%, transparent 100%);
-      transform: translateX(-100%);
-      transition: transform 0.4s;
-    }
-
-    .btn:hover::before { transform: translateX(100%); }
-
-    .btn-pink {
-      background: linear-gradient(135deg, rgba(255,0,128,0.15), rgba(255,0,128,0.05));
-      border: 1px solid var(--pink);
-      color: var(--pink);
-      box-shadow: 0 0 12px rgba(255,0,128,0.1), inset 0 0 12px rgba(255,0,128,0.05);
-    }
-
-    .btn-pink:hover {
-      box-shadow: 0 0 24px rgba(255,0,128,0.5), inset 0 0 20px rgba(255,0,128,0.1);
-    }
-
-    .btn-green {
-      background: linear-gradient(135deg, rgba(0,255,136,0.15), rgba(0,255,136,0.05));
-      border: 1px solid var(--green);
-      color: var(--green);
-      box-shadow: 0 0 12px rgba(0,255,136,0.1), inset 0 0 12px rgba(0,255,136,0.05);
-    }
-
-    .btn-green:hover {
-      box-shadow: 0 0 24px rgba(0,255,136,0.5), inset 0 0 20px rgba(0,255,136,0.1);
-    }
-
-    .btn-ghost {
-      background: var(--glass);
-      border: 1px solid var(--border);
+    .label {
+      display: block;
+      margin-bottom: 10px;
       color: var(--muted);
+      font-size: 0.84rem;
+      letter-spacing: 0.04rem;
     }
 
-    .btn-ghost:hover {
+    input[type="text"],
+    textarea {
+      width: 100%;
+      border: 1px solid rgba(72, 243, 255, 0.16);
+      background: rgba(2, 6, 14, 0.92);
+      color: var(--text);
+      padding: 14px 16px;
+      outline: none;
+      transition: border-color 0.2s ease, box-shadow 0.2s ease;
+      font: inherit;
+    }
+
+    input[type="text"]:focus,
+    textarea:focus {
       border-color: var(--cyan);
+      box-shadow: 0 0 0 1px rgba(72, 243, 255, 0.3), 0 0 26px rgba(72, 243, 255, 0.08);
+    }
+
+    textarea {
+      min-height: 300px;
+      resize: vertical;
+      font-family: Consolas, monospace;
+      line-height: 1.6;
+      font-size: 0.84rem;
+    }
+
+    .hint {
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 0.83rem;
+      line-height: 1.6;
+    }
+
+    .hint code {
       color: var(--cyan);
-    }
-
-    .btn-ig {
-      background: linear-gradient(135deg, rgba(225,48,108,0.15), rgba(193,53,132,0.05));
-      border: 1px solid rgba(225,48,108,0.6);
-      color: rgba(240,100,150,1);
-      box-shadow: 0 0 12px rgba(225,48,108,0.1), inset 0 0 12px rgba(225,48,108,0.05);
-    }
-
-    .btn-ig:hover {
-      box-shadow: 0 0 28px rgba(225,48,108,0.5), inset 0 0 20px rgba(225,48,108,0.1);
+      font-family: Consolas, monospace;
     }
 
     .badge-row {
       display: flex;
+      flex-wrap: wrap;
       gap: 8px;
       margin-top: 12px;
-      flex-wrap: wrap;
     }
 
     .badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      padding: 3px 12px;
-      border-radius: 2px;
-      font-size: 0.7rem;
-      letter-spacing: 1px;
-      text-transform: uppercase;
-      border: 1px solid;
-      font-weight: 600;
-    }
-
-    .badge-yt {
-      border-color: rgba(255,60,60,0.4);
-      color: rgba(255,80,80,0.8);
-      background: rgba(255,0,0,0.05);
-    }
-
-    .badge-ig {
-      border-color: rgba(225,48,108,0.4);
-      color: rgba(240,100,150,0.9);
-      background: rgba(225,48,108,0.05);
-    }
-
-    .file-zone {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-    }
-
-    .file-label {
-      flex: 1;
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 14px 16px;
-      background: rgba(0,0,0,0.4);
-      border: 1px dashed rgba(0,245,255,0.2);
-      border-radius: 2px;
-      cursor: pointer;
+      padding: 5px 10px;
+      border: 1px solid var(--line);
+      font-size: 0.72rem;
       color: var(--muted);
-      font-size: 0.85rem;
-      transition: border-color 0.2s, color 0.2s;
-    }
-
-    .file-label:hover {
-      border-color: var(--cyan);
-      color: var(--cyan);
-    }
-
-    .file-label span {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    input[type="file"] { display: none; }
-
-    .result-head {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      flex-wrap: wrap;
-      margin-bottom: 12px;
-    }
-
-    .result-title {
-      font-family: 'Orbitron', monospace;
-      font-size: 0.6rem;
-      letter-spacing: 3px;
-      color: var(--cyan);
       text-transform: uppercase;
+      letter-spacing: 0.08rem;
+      background: rgba(255, 255, 255, 0.02);
     }
 
-    textarea {
-      width: 100%;
-      background: rgba(0,0,0,0.5);
-      border: 1px solid rgba(0,245,255,0.1);
-      border-radius: 2px;
-      color: #7affdc;
-      font-family: 'Courier New', monospace;
-      font-size: 0.83rem;
-      line-height: 1.7;
-      padding: 16px;
-      resize: vertical;
-      min-height: 220px;
-      outline: none;
-      transition: border-color 0.2s;
-    }
-
-    textarea:focus {
-      border-color: var(--cyan);
-      box-shadow: 0 0 20px rgba(0,245,255,0.05);
-    }
-
-    .progress-wrap {
-      display: none;
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
       margin-top: 16px;
     }
 
-    .progress-wrap.show { display: block; }
-
-    .progress-track {
-      background: rgba(0,0,0,0.5);
-      border: 1px solid var(--border);
-      border-radius: 2px;
-      height: 4px;
-      overflow: hidden;
-    }
-
-    .progress-bar {
-      height: 100%;
-      background: linear-gradient(90deg, var(--cyan), var(--pink));
-      width: 30%;
-      animation: scan 1.5s linear infinite;
-    }
-
-    @keyframes scan {
-      0% { margin-left: -30%; }
-      100% { margin-left: 110%; }
-    }
-
-    .progress-label {
-      font-size: 0.7rem;
-      letter-spacing: 2px;
+    .btn {
+      border: 1px solid transparent;
+      padding: 12px 18px;
+      cursor: pointer;
+      font: inherit;
+      font-weight: 700;
+      letter-spacing: 0.06rem;
       text-transform: uppercase;
-      color: var(--cyan);
-      margin-top: 8px;
-      text-align: center;
-      animation: blink 1.2s ease-in-out infinite;
+      transition: 0.2s ease;
     }
 
-    @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+    .btn-primary {
+      background: linear-gradient(135deg, rgba(72, 243, 255, 0.15), rgba(72, 243, 255, 0.05));
+      border-color: rgba(72, 243, 255, 0.55);
+      color: var(--cyan);
+    }
+
+    .btn-secondary {
+      background: linear-gradient(135deg, rgba(115, 255, 178, 0.16), rgba(115, 255, 178, 0.05));
+      border-color: rgba(115, 255, 178, 0.55);
+      color: var(--green);
+    }
+
+    .btn-ghost {
+      background: rgba(255, 255, 255, 0.03);
+      border-color: var(--line);
+      color: var(--text);
+    }
+
+    .btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.24);
+    }
+
+    .btn[disabled] {
+      opacity: 0.45;
+      cursor: not-allowed;
+      transform: none;
+      box-shadow: none;
+    }
+
+    .file-box {
+      border: 1px dashed rgba(72, 243, 255, 0.28);
+      padding: 16px;
+      background: rgba(2, 6, 14, 0.6);
+      color: var(--muted);
+    }
+
+    input[type="file"] {
+      display: none;
+    }
+
+    .file-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      cursor: pointer;
+      color: var(--cyan);
+      font-weight: 700;
+    }
+
+    .summary {
+      margin-top: 12px;
+      padding: 12px 14px;
+      border-left: 2px solid var(--cyan);
+      background: rgba(72, 243, 255, 0.05);
+      color: var(--muted);
+      font-size: 0.84rem;
+      line-height: 1.55;
+      display: none;
+    }
+
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 14px;
+      border: 1px solid var(--line);
+      background: rgba(4, 10, 20, 0.76);
+      font-family: 'Orbitron', monospace;
+      font-size: 0.68rem;
+      letter-spacing: 0.1rem;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #425267;
+    }
+
+    .dot.on {
+      background: var(--green);
+      box-shadow: 0 0 18px rgba(115, 255, 178, 0.55);
+    }
 
     .toast {
       position: fixed;
-      bottom: 32px;
       left: 50%;
-      transform: translateX(-50%) translateY(20px);
-      padding: 12px 28px;
-      background: rgba(2,4,8,0.95);
-      border: 1px solid var(--border);
-      border-radius: 2px;
-      font-size: 0.82rem;
-      letter-spacing: 1px;
-      color: var(--cyan);
-      box-shadow: 0 0 30px rgba(0,245,255,0.15);
-      backdrop-filter: blur(20px);
+      bottom: 28px;
+      transform: translateX(-50%) translateY(16px);
       opacity: 0;
-      transition: opacity 0.25s, transform 0.25s;
-      z-index: 9999;
-      white-space: nowrap;
-    }
-
-    .toast::before {
-      content: '> ';
-      color: var(--pink);
-      font-family: monospace;
+      pointer-events: none;
+      transition: 0.2s ease;
+      padding: 12px 18px;
+      border: 1px solid var(--line);
+      background: rgba(2, 8, 18, 0.95);
+      color: var(--text);
+      box-shadow: var(--shadow);
+      z-index: 20;
     }
 
     .toast.show {
@@ -535,337 +357,239 @@
       transform: translateX(-50%) translateY(0);
     }
 
-    .toast.err {
-      border-color: var(--pink);
-      color: var(--pink);
-      box-shadow: 0 0 30px rgba(255,0,128,0.15);
-    }
-
-    .toast.ok {
-      border-color: var(--green);
-      color: var(--green);
-      box-shadow: 0 0 30px rgba(0,255,136,0.15);
-    }
+    .toast.ok { border-color: rgba(115, 255, 178, 0.55); color: var(--green); }
+    .toast.err { border-color: rgba(255, 138, 138, 0.55); color: var(--warn); }
 
     @media (max-width: 640px) {
-      .wrap { padding: 40px 16px 80px; }
-      .panel { padding: 22px; }
-      .logo { font-size: 2.7rem; letter-spacing: 5px; }
-      .menu-btn { flex: 1 1 calc(50% - 10px); text-align: center; }
+      .wrap { padding: 28px 14px 72px; }
+      .panel, .panel-wide { padding: 18px; }
+      .actions .btn { width: 100%; }
     }
   </style>
 </head>
 <body>
-  <div class="bg-grid"></div>
-  <div class="bg-orb bg-orb-1"></div>
-  <div class="bg-orb bg-orb-2"></div>
-
   <div class="wrap">
-    <div class="logo">VIDIGO</div>
-    <div class="tagline">Video · Audio · Transcript</div>
-
-    <div class="status-bar">
-      <div class="status-pill">
-        <div class="pulse-dot" id="gpuDot"></div>
-        <span id="gpuStatus">SYSTEM CHECK...</span>
+    <div class="hero">
+      <h1 class="brand">VIDIGO</h1>
+      <div class="sub">
+        Instagram hesap URL'si girilirse hesapta gorunen reels/videolar toplu iner. Instagram reel URL'si girilirse tek video iner.
+        YouTube playlist URL'si girilirse tum playlist iner. Tek video URL'si girilirse yalnizca o video iner.
+        Her islem platform ve kaynak adina gore ayri manifest JSON'a kaydedilir.
       </div>
     </div>
 
-    <div class="menu-bar">
-      <button class="menu-btn active" onclick="jumpToSection('downloadPanel')">Indir</button>
-      <button class="menu-btn" onclick="jumpToSection('batchPanel')">Toplu</button>
-      <button class="menu-btn" onclick="jumpToSection('outputPanel')">Cikti</button>
-      <button class="menu-btn" onclick="window.location.href='/history_page'">Gecmis</button>
-    </div>
-
-    <div class="panel" id="downloadPanel">
-      <div class="corner-br"></div>
-      <div class="panel-label">
-        <div class="panel-label-num">01</div>
-        Video / Ses Indir
-      </div>
-
-      <div class="input-wrap">
-        <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
-          <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
-        </svg>
-        <input type="text" id="videoUrl" placeholder="YouTube veya Instagram baglantisi buraya..." />
-      </div>
-
-      <div class="badge-row">
-        <span class="badge badge-yt">YouTube</span>
-        <span class="badge badge-ig">Instagram</span>
-      </div>
-
-      <div class="btn-row" id="ytActionRow" style="display:none">
-        <button class="btn btn-pink" onclick="youtubeTranscribe()">MP3 Indir</button>
-      </div>
-
-      <div class="btn-row" id="igActionRow" style="display:none">
-        <button class="btn btn-ig" onclick="instagramTranscribe()">MP3 Indir</button>
-      </div>
-
-      <div class="progress-wrap" id="urlProgress">
-        <div class="progress-track"><div class="progress-bar"></div></div>
-        <div class="progress-label">Isleniyor...</div>
+    <div class="nav">
+      <button type="button" onclick="document.getElementById('singlePanel').scrollIntoView({ behavior: 'smooth' })">Tek URL</button>
+      <button type="button" onclick="document.getElementById('batchPanel').scrollIntoView({ behavior: 'smooth' })">Toplu</button>
+      <button type="button" onclick="document.getElementById('outputPanel').scrollIntoView({ behavior: 'smooth' })">Cikti</button>
+      <a href="/history_page">Gecmis</a>
+      <div class="status">
+        <div class="dot" id="gpuDot"></div>
+        <span id="gpuStatus">SYSTEM CHECK</span>
       </div>
     </div>
 
-    <div class="panel" id="batchPanel">
-      <div class="corner-br"></div>
-      <div class="panel-label">
-        <div class="panel-label-num">02</div>
-        Toplu Islem · JSON
-      </div>
-
-      <div class="file-zone">
-        <label class="file-label" for="batchJsonInput">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-            <polyline points="14 2 14 8 20 8"></polyline>
-          </svg>
-          <span id="batchFileLabel">JSON dosyasi sec...</span>
-        </label>
-        <input type="file" id="batchJsonInput" accept=".json" onchange="loadBatchJson(this)" />
-      </div>
-
-      <div id="batchInfo" style="display:none; margin-top:12px; font-size:0.78rem; color:var(--muted); letter-spacing:1px;">
-        <span id="batchInfoText"></span>
-      </div>
-
-      <div class="btn-row" style="margin-top:14px;">
-        <button class="btn btn-green" id="batchStartBtn" onclick="startBatch()" disabled>Baslat</button>
-      </div>
-
-      <div class="progress-wrap" id="batchProgress">
-        <div class="progress-track"><div class="progress-bar"></div></div>
-        <div class="progress-label" id="batchProgressLabel">Isleniyor...</div>
-      </div>
-    </div>
-
-    <div class="panel" id="outputPanel">
-      <div class="corner-br"></div>
-      <div class="result-head">
-        <span class="result-title">Output</span>
-        <div style="display:flex;gap:8px;align-items:center;">
-          <button class="btn btn-ghost" id="batchDownloadBtn" style="display:none;padding:8px 14px; font-size:0.72rem; letter-spacing:1px;" onclick="downloadBatchResult()">JSON</button>
-          <button class="btn btn-ghost" style="padding:8px 14px; font-size:0.72rem; letter-spacing:1px;" onclick="copyResult()">Copy</button>
+    <div class="panel-grid">
+      <section class="panel" id="singlePanel">
+        <div class="eyebrow"><span>01</span> Tek URL Indir</div>
+        <label class="label" for="videoUrl">YouTube veya Instagram URL</label>
+        <input type="text" id="videoUrl" placeholder="ornek: https://www.instagram.com/ornekhesap/ veya https://www.youtube.com/playlist?list=..." />
+        <div class="badge-row">
+          <div class="badge">YouTube video</div>
+          <div class="badge">YouTube playlist</div>
+          <div class="badge">Instagram reel</div>
+          <div class="badge">Instagram hesap</div>
         </div>
-      </div>
-      <textarea id="result" placeholder="> transkript ciktisi burada gorunecek..."></textarea>
+        <div class="actions">
+          <button class="btn btn-primary" type="button" onclick="downloadSingle()">Indir</button>
+          <button class="btn btn-ghost" type="button" onclick="copyResult()">Ciktiyi Kopyala</button>
+        </div>
+        <div class="hint">
+          Cookie gerekiyorsa repo icinde <code>cookies/youtube.txt</code> ve <code>cookies/instagram.txt</code> dosyalarini kullanir.
+        </div>
+      </section>
+
+      <section class="panel" id="batchPanel">
+        <div class="eyebrow"><span>02</span> Toplu JSON</div>
+        <div class="file-box">
+          <label class="file-label" for="batchJsonInput">JSON dosyasi sec</label>
+          <input type="file" id="batchJsonInput" accept=".json" onchange="loadBatchJson(this)" />
+          <div class="hint" style="margin-top: 12px;">
+            Desteklenen formatlar:
+            <code>{"urls":["..."]}</code>
+            veya eski format olarak
+            <code>{"profile":"kanal","videos":["..."]}</code>
+          </div>
+        </div>
+        <div id="batchInfo" class="summary"></div>
+        <div class="actions">
+          <button class="btn btn-secondary" id="batchStartBtn" type="button" onclick="startBatch()" disabled>Toplu Indir</button>
+          <button class="btn btn-ghost" id="batchDownloadBtn" type="button" onclick="downloadBatchResult()" style="display:none;">JSON Indir</button>
+        </div>
+      </section>
     </div>
+
+    <section class="panel-wide" id="outputPanel">
+      <div class="eyebrow"><span>03</span> Cikti</div>
+      <textarea id="result" placeholder="> indirme ozeti ve manifest detaylari burada gorunecek"></textarea>
+    </section>
   </div>
 
   <div id="toast" class="toast"></div>
 
   <script>
-    let toastTimer;
     let batchData = null;
     let batchResult = null;
+    let toastTimer;
 
     async function checkGpuStatus() {
       try {
         const res = await fetch("/status");
         const data = await res.json();
         const dot = document.getElementById("gpuDot");
-        const txt = document.getElementById("gpuStatus");
+        const text = document.getElementById("gpuStatus");
         if (data.gpu) {
           dot.classList.add("on");
-          txt.textContent = "GPU ACTIVE";
+          text.textContent = "GPU ACTIVE";
         } else {
-          txt.textContent = "GPU OFFLINE · CPU MODE";
+          text.textContent = "CPU MODE";
         }
       } catch {
-        document.getElementById("gpuStatus").textContent = "SYSTEM UNREACHABLE";
+        document.getElementById("gpuStatus").textContent = "STATUS ERR";
       }
     }
 
-    document.getElementById("videoUrl").addEventListener("input", checkUrlType);
-
-    function isYouTubeUrl(url) {
-      return url.includes("youtube.com") || url.includes("youtu.be");
-    }
-
-    function isInstagramUrl(url) {
-      return url.includes("instagram.com");
-    }
-
-    function checkUrlType() {
-      const url = document.getElementById("videoUrl").value.trim();
-      document.getElementById("ytActionRow").style.display = isYouTubeUrl(url) ? "flex" : "none";
-      document.getElementById("igActionRow").style.display = isInstagramUrl(url) ? "flex" : "none";
-    }
-
-    function showToast(msg, type = "") {
-      const t = document.getElementById("toast");
-      t.textContent = msg;
-      t.className = "toast show" + (type ? " " + type : "");
+    function showToast(message, type = "") {
+      const toast = document.getElementById("toast");
+      toast.textContent = message;
+      toast.className = "toast show" + (type ? " " + type : "");
       clearTimeout(toastTimer);
-      toastTimer = setTimeout(() => t.classList.remove("show"), 3500);
+      toastTimer = setTimeout(() => toast.classList.remove("show"), 3200);
     }
 
-    function showProgress(id) {
-      document.getElementById(id).classList.add("show");
+    function setResult(data) {
+      document.getElementById("result").value = typeof data === "string" ? data : JSON.stringify(data, null, 2);
     }
 
-    function hideProgress(id) {
-      document.getElementById(id).classList.remove("show");
-    }
+    async function downloadSingle() {
+      const url = document.getElementById("videoUrl").value.trim();
+      if (!url) {
+        showToast("URL gerekli", "err");
+        return;
+      }
 
-    function jumpToSection(id) {
-      const section = document.getElementById(id);
-      if (!section) return;
-      section.scrollIntoView({ behavior: "smooth", block: "start" });
-    }
-
-    function copyResult() {
-      const value = document.getElementById("result").value;
-      if (!value) return;
-      navigator.clipboard.writeText(value).then(() => showToast("Panoya kopyalandi", "ok"));
-    }
-
-    async function _transcribeRequest(endpoint, url, toastMsg) {
-      showToast(toastMsg);
-      showProgress("urlProgress");
-      document.getElementById("result").value = "";
+      setResult("");
+      showToast("Indirme basladi");
       try {
-        const res = await fetch(endpoint, {
+        const res = await fetch("/download_media", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ url })
         });
         const data = await res.json();
-        hideProgress("urlProgress");
         if (!res.ok || data.error) {
-          showToast(data.error || "Bir hata olustu", "err");
-          return;
+          throw new Error(data.error || "Indirme basarisiz");
         }
-        document.getElementById("result").value = data.text || "";
-        const engine = data.engine === "youtube_api" ? "YouTube API" : "Whisper";
-        showToast(`Transkript tamamlandi (${engine})`, "ok");
-      } catch {
-        hideProgress("urlProgress");
-        showToast("Baglanti hatasi", "err");
+        batchResult = null;
+        setResult(data);
+        showToast(`Tamamlandi: ${data.item_count || 0} oge`, "ok");
+      } catch (error) {
+        setResult({ error: error.message || "Indirme basarisiz" });
+        showToast(error.message || "Indirme basarisiz", "err");
       }
     }
 
-    function instagramTranscribe() {
-      const url = document.getElementById("videoUrl").value.trim();
-      if (!url) return;
-      _transcribeRequest("/instagram_transcribe", url, "Instagram indiriliyor...");
-    }
-
-    function youtubeTranscribe() {
-      const url = document.getElementById("videoUrl").value.trim();
-      if (!url) return;
-      _transcribeRequest("/youtube_transcribe", url, "YouTube indiriliyor...");
+    function copyResult() {
+      const value = document.getElementById("result").value;
+      if (!value) return;
+      navigator.clipboard.writeText(value).then(() => showToast("Cikti kopyalandi", "ok"));
     }
 
     function loadBatchJson(input) {
       if (!input.files.length) return;
-      const file = input.files[0];
-      document.getElementById("batchFileLabel").textContent = file.name;
       const reader = new FileReader();
-      reader.onload = e => {
+      const info = document.getElementById("batchInfo");
+
+      reader.onload = event => {
         try {
-          batchData = JSON.parse(e.target.result);
-          const count = (batchData.videos || []).length;
-          const profile = batchData.profile || "";
-          document.getElementById("batchInfoText").textContent = `${profile ? profile + " · " : ""}${count} video`;
-          document.getElementById("batchInfo").style.display = "block";
-          document.getElementById("batchStartBtn").disabled = count === 0;
-        } catch {
-          showToast("Gecersiz JSON", "err");
+          const parsed = JSON.parse(event.target.result);
+          const urls = Array.isArray(parsed.urls) ? parsed.urls : (Array.isArray(parsed.videos) ? parsed.videos : []);
+          batchData = {
+            profile: parsed.profile || parsed.source_name || "",
+            urls
+          };
+
+          if (!urls.length) {
+            throw new Error("JSON icinde url listesi bulunamadi");
+          }
+
+          info.style.display = "block";
+          info.textContent = `${batchData.profile ? batchData.profile + " / " : ""}${urls.length} URL hazir`;
+          document.getElementById("batchStartBtn").disabled = false;
+          showToast("Toplu JSON yuklendi", "ok");
+        } catch (error) {
           batchData = null;
+          info.style.display = "block";
+          info.textContent = error.message || "Gecersiz JSON";
+          document.getElementById("batchStartBtn").disabled = true;
+          showToast(error.message || "Gecersiz JSON", "err");
         }
       };
-      reader.readAsText(file);
+
+      reader.readAsText(input.files[0]);
     }
 
     async function startBatch() {
-      if (!batchData) return;
-      const urls = batchData.videos || [];
-      if (!urls.length) return;
+      if (!batchData || !batchData.urls.length) {
+        showToast("Toplu islem icin JSON gerekli", "err");
+        return;
+      }
 
       document.getElementById("batchStartBtn").disabled = true;
       document.getElementById("batchDownloadBtn").style.display = "none";
-      document.getElementById("result").value = "";
-      showProgress("batchProgress");
+      setResult("");
+      showToast("Toplu indirme basladi");
 
-      const total = urls.length;
-      let done = 0;
-      const results = [];
-
-      const updateLabel = () => {
-        document.getElementById("batchProgressLabel").textContent = `Isleniyor... ${done} / ${total}`;
-      };
-      updateLabel();
-
-      for (const url of urls) {
-        const isYT = url.includes("youtube.com") || url.includes("youtu.be");
-        const endpoint = isYT ? "/youtube_transcribe" : "/instagram_transcribe";
-        try {
-          const res = await fetch(endpoint, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ url })
-          });
-          const data = await res.json();
-          results.push({
-            url,
-            platform: isYT ? "youtube" : "instagram",
-            engine: data.engine || null,
-            text: data.text || null,
-            status: res.ok && !data.error ? "success" : "error",
-            error: data.error || null
-          });
-        } catch (error) {
-          results.push({
-            url,
-            platform: isYT ? "youtube" : "instagram",
-            engine: null,
-            text: null,
-            status: "error",
-            error: error.message
-          });
+      try {
+        const res = await fetch("/batch_download", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ urls: batchData.urls })
+        });
+        const data = await res.json();
+        if (!res.ok || data.error) {
+          throw new Error(data.error || "Toplu indirme basarisiz");
         }
-        done++;
-        updateLabel();
+
+        batchResult = {
+          profile: batchData.profile,
+          processed_at: new Date().toISOString(),
+          ...data
+        };
+        setResult(batchResult);
+        document.getElementById("batchDownloadBtn").style.display = "inline-flex";
+        showToast(`Tamamlandi: ${data.success}/${data.total}`, "ok");
+      } catch (error) {
+        setResult({ error: error.message || "Toplu indirme basarisiz" });
+        showToast(error.message || "Toplu indirme basarisiz", "err");
+      } finally {
+        document.getElementById("batchStartBtn").disabled = false;
       }
-
-      hideProgress("batchProgress");
-      document.getElementById("batchStartBtn").disabled = false;
-
-      const success = results.filter(item => item.status === "success").length;
-      batchResult = {
-        profile: batchData.profile || "",
-        processed_at: new Date().toISOString(),
-        total: results.length,
-        success,
-        results
-      };
-
-      document.getElementById("result").value = JSON.stringify(batchResult, null, 2);
-      document.getElementById("batchDownloadBtn").style.display = "inline-flex";
-      showToast(`Tamamlandi: ${success}/${total}`, "ok");
     }
 
     function downloadBatchResult() {
       if (!batchResult) return;
       const blob = new Blob([JSON.stringify(batchResult, null, 2)], { type: "application/json" });
-      const a = document.createElement("a");
-      const profile = batchResult.profile || "batch";
-      a.href = URL.createObjectURL(blob);
-      a.download = `${profile}_transcripts.json`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(a.href);
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = `${batchResult.profile || "batch-download"}_result.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(link.href);
     }
 
     checkGpuStatus();
-    checkUrlType();
   </script>
 </body>
 </html>

@@ -13,6 +13,7 @@ from youtube_transcript_api import (
 )
 
 from transcribers.whisper_transcriber import transcribe_whisper
+from utils.download_service import batch_download_media, download_media
 from utils.file_utils import load_download_history, save_download_record, save_transcript_to_file
 from utils.video_downloader import build_unique_filepath, download_audio_generic
 from utils.youtube_utils import extract_youtube_video_id
@@ -143,6 +144,47 @@ def history():
     except Exception as e:
         logger.exception("History load failed")
         return jsonify({"error": f"Geçmiş yüklenemedi: {str(e)}"}), 500
+
+
+@app.route("/download_media", methods=["POST"])
+def download_media_route():
+    data = request.get_json(silent=True) or {}
+    url = (data.get("url") or "").strip()
+    cookie_path = (data.get("cookie_path") or "").strip() or None
+
+    if not url:
+        return jsonify({"error": "Indirilecek URL gerekli."}), 400
+
+    try:
+        logger.info("Media download started: %s", url)
+        payload = download_media(url, cookie_path=cookie_path)
+        logger.info("Media download completed: %s (%s item)", url, payload.get("item_count", 0))
+        return jsonify({"status": "success", **payload})
+    except ValueError as exc:
+        logger.warning("Invalid download request: %s", url)
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        logger.exception("Media download failed: %s", url)
+        return jsonify({"error": f"Indirme hatasi: {str(exc)}"}), 500
+
+
+@app.route("/batch_download", methods=["POST"])
+def batch_download_route():
+    data = request.get_json(silent=True) or {}
+    urls = data.get("urls", [])
+    cookie_path = (data.get("cookie_path") or "").strip() or None
+
+    if not urls:
+        return jsonify({"error": "URL listesi bos."}), 400
+
+    try:
+        logger.info("Batch download started (%s urls)", len(urls))
+        payload = batch_download_media(urls, cookie_path=cookie_path)
+        logger.info("Batch download completed (%s/%s success)", payload.get("success"), payload.get("total"))
+        return jsonify(payload)
+    except Exception as exc:
+        logger.exception("Batch download failed")
+        return jsonify({"error": f"Toplu indirme hatasi: {str(exc)}"}), 500
 
 
 @app.route("/instagram_transcribe", methods=["POST"])

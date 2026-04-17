@@ -44,6 +44,8 @@ htmlcov/
 downloads/
 transcripts/
 ffmpeg/
+cookies/*.txt
+cookies/*.session
 
 # IDEs / editors
 .idea/

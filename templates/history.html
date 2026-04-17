@@ -3,303 +3,240 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>VIDIGO - Gecmis</title>
+  <title>VIDIGO / Gecmis</title>
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Space+Grotesk:wght@300;400;500;600;700&display=swap');
-
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+    @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Space+Grotesk:wght@400;500;700&display=swap');
 
     :root {
-      --cyan: #00f5ff;
-      --pink: #ff0080;
-      --green: #00ff88;
-      --bg: #020408;
-      --glass: rgba(255,255,255,0.03);
-      --border: rgba(0,245,255,0.15);
-      --text: #e0f0ff;
-      --muted: rgba(150,200,220,0.5);
+      --bg: #030711;
+      --panel: rgba(8, 14, 28, 0.84);
+      --line: rgba(72, 243, 255, 0.18);
+      --cyan: #48f3ff;
+      --pink: #ff5ca9;
+      --green: #73ffb2;
+      --text: #e8f6ff;
+      --muted: #88a4b6;
     }
+
+    * { box-sizing: border-box; }
 
     body {
-      background: var(--bg);
-      color: var(--text);
-      font-family: 'Space Grotesk', sans-serif;
+      margin: 0;
       min-height: 100vh;
-      overflow-x: hidden;
-    }
-
-    .bg-grid {
-      position: fixed;
-      inset: 0;
-      z-index: 0;
-      background-image:
-        linear-gradient(rgba(0,245,255,0.04) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(0,245,255,0.04) 1px, transparent 1px);
-      background-size: 60px 60px;
-      pointer-events: none;
-    }
-
-    .bg-orb {
-      position: fixed;
-      border-radius: 50%;
-      filter: blur(120px);
-      pointer-events: none;
-      z-index: 0;
-    }
-
-    .bg-orb-1 {
-      width: 600px;
-      height: 600px;
-      background: radial-gradient(circle, rgba(0,245,255,0.08) 0%, transparent 70%);
-      top: -200px;
-      left: -200px;
-    }
-
-    .bg-orb-2 {
-      width: 500px;
-      height: 500px;
-      background: radial-gradient(circle, rgba(255,0,128,0.07) 0%, transparent 70%);
-      bottom: -150px;
-      right: -150px;
+      font-family: 'Space Grotesk', sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(72, 243, 255, 0.12), transparent 28%),
+        radial-gradient(circle at bottom right, rgba(255, 92, 169, 0.1), transparent 22%),
+        linear-gradient(180deg, #040814, #010308);
     }
 
     .wrap {
-      position: relative;
-      z-index: 1;
-      max-width: 920px;
+      max-width: 1080px;
       margin: 0 auto;
-      padding: 56px 20px 96px;
+      padding: 34px 18px 72px;
     }
 
-    .topbar {
+    .top {
       display: flex;
-      justify-content: space-between;
       align-items: center;
+      justify-content: space-between;
       gap: 14px;
       flex-wrap: wrap;
-      margin-bottom: 24px;
+      margin-bottom: 22px;
     }
 
     .brand {
+      margin: 0;
       font-family: 'Orbitron', monospace;
+      font-size: clamp(2rem, 6vw, 3rem);
       font-weight: 900;
-      font-size: 2.1rem;
-      letter-spacing: 5px;
-      background: linear-gradient(90deg, var(--cyan), #fff, var(--pink));
+      letter-spacing: 0.24rem;
+      background: linear-gradient(90deg, var(--cyan), #ffffff, var(--pink));
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
       background-clip: text;
     }
 
-    .menu-bar {
+    .nav {
       display: flex;
       gap: 10px;
       flex-wrap: wrap;
     }
 
-    .menu-btn {
+    .nav a,
+    .nav button {
+      border: 1px solid var(--line);
+      background: rgba(8, 14, 28, 0.72);
+      color: var(--text);
+      text-decoration: none;
       padding: 10px 16px;
-      border: 1px solid var(--border);
-      background: var(--glass);
-      color: var(--muted);
-      border-radius: 999px;
-      font-family: 'Orbitron', monospace;
-      font-size: 0.68rem;
-      letter-spacing: 2px;
-      text-transform: uppercase;
       cursor: pointer;
-      transition: border-color 0.2s, color 0.2s, box-shadow 0.2s;
+      font-family: 'Orbitron', monospace;
+      font-size: 0.72rem;
+      letter-spacing: 0.12rem;
+      text-transform: uppercase;
     }
 
-    .menu-btn:hover,
-    .menu-btn.active {
+    .nav a:hover,
+    .nav button:hover {
       color: var(--cyan);
       border-color: var(--cyan);
-      box-shadow: 0 0 18px rgba(0,245,255,0.18);
     }
 
     .panel {
+      background: linear-gradient(180deg, rgba(8, 14, 28, 0.92), rgba(5, 9, 18, 0.92));
+      border: 1px solid var(--line);
+      padding: 22px;
       position: relative;
-      background: var(--glass);
-      backdrop-filter: blur(20px);
-      border-radius: 2px;
-      border: 1px solid var(--border);
-      padding: 32px;
-      overflow: hidden;
     }
 
     .panel::before {
-      content: '';
+      content: "";
       position: absolute;
-      top: 0;
       left: 0;
       right: 0;
+      top: 0;
       height: 1px;
       background: linear-gradient(90deg, transparent, var(--cyan), transparent);
     }
 
-    .panel::after {
-      content: '';
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 20px;
-      height: 20px;
-      border-top: 2px solid var(--cyan);
-      border-left: 2px solid var(--cyan);
-    }
-
-    .corner-br {
-      position: absolute;
-      bottom: 0;
-      right: 0;
-      width: 20px;
-      height: 20px;
-      border-bottom: 2px solid var(--cyan);
-      border-right: 2px solid var(--cyan);
-      pointer-events: none;
-    }
-
-    .panel-label {
-      font-family: 'Orbitron', monospace;
-      font-size: 0.62rem;
-      letter-spacing: 3px;
-      text-transform: uppercase;
-      color: var(--cyan);
-      margin-bottom: 24px;
-      display: flex;
+    .eyebrow {
+      display: inline-flex;
       align-items: center;
       gap: 10px;
+      margin-bottom: 18px;
+      color: var(--cyan);
+      font-family: 'Orbitron', monospace;
+      font-size: 0.74rem;
+      letter-spacing: 0.12rem;
+      text-transform: uppercase;
     }
 
-    .panel-label-num {
-      width: 22px;
-      height: 22px;
-      border: 1px solid var(--cyan);
-      border-radius: 50%;
-      display: flex;
+    .eyebrow span {
+      display: inline-flex;
       align-items: center;
       justify-content: center;
-      font-size: 0.6rem;
-      color: var(--cyan);
-      flex-shrink: 0;
+      width: 24px;
+      height: 24px;
+      border: 1px solid var(--cyan);
+      border-radius: 50%;
+      font-size: 0.66rem;
     }
 
     .toolbar {
       display: flex;
-      justify-content: space-between;
       align-items: center;
+      justify-content: space-between;
       gap: 12px;
       flex-wrap: wrap;
-      margin-bottom: 18px;
-    }
-
-    .toolbar-text {
+      margin-bottom: 16px;
       color: var(--muted);
-      font-size: 0.82rem;
-      letter-spacing: 1px;
     }
 
     .btn {
-      padding: 11px 16px;
-      border: 1px solid var(--border);
-      background: var(--glass);
-      color: var(--muted);
-      border-radius: 2px;
-      font-family: 'Space Grotesk', sans-serif;
-      font-size: 0.82rem;
-      letter-spacing: 1px;
-      text-transform: uppercase;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.03);
+      color: var(--text);
+      padding: 10px 16px;
       cursor: pointer;
-      transition: border-color 0.2s, color 0.2s, box-shadow 0.2s;
+      font: inherit;
+      text-transform: uppercase;
+      letter-spacing: 0.06rem;
     }
 
     .btn:hover {
-      color: var(--cyan);
       border-color: var(--cyan);
-      box-shadow: 0 0 18px rgba(0,245,255,0.18);
+      color: var(--cyan);
     }
 
-    .history-list {
+    .list {
       display: grid;
       gap: 14px;
     }
 
-    .history-empty {
-      padding: 18px;
-      border: 1px dashed rgba(0,245,255,0.18);
+    .empty {
+      border: 1px dashed var(--line);
+      padding: 16px;
       color: var(--muted);
-      font-size: 0.84rem;
-      background: rgba(0,0,0,0.25);
+      background: rgba(255, 255, 255, 0.02);
     }
 
-    .history-card {
-      border: 1px solid rgba(0,245,255,0.14);
-      background: rgba(0,0,0,0.28);
+    .card {
+      border: 1px solid rgba(72, 243, 255, 0.14);
+      background: rgba(255, 255, 255, 0.02);
       padding: 16px;
     }
 
-    .history-head {
+    .head {
       display: flex;
       justify-content: space-between;
-      align-items: flex-start;
       gap: 12px;
       flex-wrap: wrap;
       margin-bottom: 12px;
     }
 
-    .history-title {
+    .title {
+      font-size: 1rem;
+      font-weight: 700;
       color: var(--text);
-      font-weight: 600;
-      font-size: 0.96rem;
-      word-break: break-word;
     }
 
-    .history-meta {
+    .meta {
+      font-size: 0.74rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08rem;
+      line-height: 1.6;
+    }
+
+    .grid {
+      display: grid;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .row {
+      border-left: 2px solid rgba(72, 243, 255, 0.3);
+      padding: 8px 10px;
+      background: rgba(0, 0, 0, 0.22);
+    }
+
+    .key {
+      display: block;
       color: var(--muted);
       font-size: 0.72rem;
-      letter-spacing: 1px;
       text-transform: uppercase;
+      letter-spacing: 0.08rem;
+      margin-bottom: 4px;
     }
 
-    .history-text {
-      color: #92ffd4;
-      font-family: 'Courier New', monospace;
-      font-size: 0.8rem;
-      line-height: 1.65;
+    .value {
+      color: var(--text);
+      font-size: 0.86rem;
+      line-height: 1.5;
+      word-break: break-word;
       white-space: pre-wrap;
-      background: rgba(0,0,0,0.25);
-      border: 1px solid rgba(0,245,255,0.08);
-      padding: 12px;
-      max-height: 220px;
-      overflow: auto;
+      font-family: Consolas, monospace;
     }
 
-    .history-actions {
+    .actions {
       display: flex;
-      gap: 8px;
+      gap: 10px;
       flex-wrap: wrap;
-      margin-top: 12px;
     }
 
     .toast {
       position: fixed;
-      bottom: 32px;
       left: 50%;
-      transform: translateX(-50%) translateY(20px);
-      padding: 12px 28px;
-      background: rgba(2,4,8,0.95);
-      border: 1px solid var(--border);
-      border-radius: 2px;
-      font-size: 0.82rem;
-      letter-spacing: 1px;
-      color: var(--cyan);
-      box-shadow: 0 0 30px rgba(0,245,255,0.15);
-      backdrop-filter: blur(20px);
+      bottom: 28px;
+      transform: translateX(-50%) translateY(16px);
       opacity: 0;
-      transition: opacity 0.25s, transform 0.25s;
-      z-index: 9999;
-      white-space: nowrap;
+      transition: 0.2s ease;
+      padding: 12px 18px;
+      border: 1px solid var(--line);
+      background: rgba(2, 8, 18, 0.95);
+      color: var(--green);
     }
 
     .toast.show {
@@ -308,56 +245,45 @@
     }
 
     @media (max-width: 640px) {
-      .wrap { padding: 32px 16px 72px; }
-      .panel { padding: 22px; }
-      .topbar { align-items: flex-start; }
+      .wrap { padding: 24px 14px 60px; }
+      .panel { padding: 18px; }
+      .btn { width: 100%; }
     }
   </style>
 </head>
 <body>
-  <div class="bg-grid"></div>
-  <div class="bg-orb bg-orb-1"></div>
-  <div class="bg-orb bg-orb-2"></div>
-
   <div class="wrap">
-    <div class="topbar">
-      <div class="brand">VIDIGO</div>
-      <div class="menu-bar">
-        <button class="menu-btn" onclick="window.location.href='/'">Ana Sayfa</button>
-        <button class="menu-btn active">Gecmis</button>
+    <div class="top">
+      <h1 class="brand">VIDIGO</h1>
+      <div class="nav">
+        <a href="/">Ana Sayfa</a>
+        <button type="button" onclick="fetchHistory()">Yenile</button>
       </div>
     </div>
 
-    <div class="panel">
-      <div class="corner-br"></div>
-      <div class="panel-label">
-        <div class="panel-label-num">01</div>
-        Gecmis
-      </div>
-
+    <section class="panel">
+      <div class="eyebrow"><span>01</span> Indirme Gecmisi</div>
       <div class="toolbar">
-        <div class="toolbar-text" id="historySummary">Kayitlar yukleniyor...</div>
-        <button class="btn" onclick="fetchHistory()">Yenile</button>
+        <div id="historySummary">Kayitlar yukleniyor...</div>
       </div>
-
-      <div id="historyList" class="history-list">
-        <div class="history-empty">Henuz kayit bulunmuyor.</div>
+      <div class="list" id="historyList">
+        <div class="empty">Kayitlar yukleniyor...</div>
       </div>
-    </div>
+    </section>
   </div>
 
-  <div id="toast" class="toast"></div>
+  <div class="toast" id="toast"></div>
 
   <script>
-    let toastTimer;
     let historyItems = [];
+    let toastTimer;
 
-    function showToast(msg) {
-      const t = document.getElementById("toast");
-      t.textContent = msg;
-      t.className = "toast show";
+    function showToast(message) {
+      const toast = document.getElementById("toast");
+      toast.textContent = message;
+      toast.className = "toast show";
       clearTimeout(toastTimer);
-      toastTimer = setTimeout(() => t.classList.remove("show"), 3000);
+      toastTimer = setTimeout(() => toast.classList.remove("show"), 2500);
     }
 
     function escapeHtml(value) {
@@ -369,50 +295,68 @@
         .replaceAll("'", "&#39;");
     }
 
-    function formatHistoryDate(value) {
-      if (!value) return "Tarih yok";
+    function formatDate(value) {
+      if (!value) return "-";
       const date = new Date(value);
       if (Number.isNaN(date.getTime())) return value;
       return date.toLocaleString("tr-TR");
     }
 
+    function renderField(label, value) {
+      if (!value) return "";
+      return `
+        <div class="row">
+          <span class="key">${escapeHtml(label)}</span>
+          <div class="value">${escapeHtml(value)}</div>
+        </div>
+      `;
+    }
+
+    function copyItem(index) {
+      const item = historyItems[index];
+      if (!item) return;
+      navigator.clipboard.writeText(JSON.stringify(item, null, 2)).then(() => showToast("Kayit kopyalandi"));
+    }
+
     function renderHistory(items) {
       historyItems = items || [];
       const list = document.getElementById("historyList");
-      const summary = document.getElementById("historySummary");
-      summary.textContent = `${historyItems.length} kayit bulundu`;
+      document.getElementById("historySummary").textContent = `${historyItems.length} kayit bulundu`;
 
       if (!historyItems.length) {
-        list.innerHTML = `<div class="history-empty">Henuz kayit bulunmuyor.</div>`;
+        list.innerHTML = `<div class="empty">Henuz kayit bulunmuyor.</div>`;
         return;
       }
 
-      list.innerHTML = historyItems.map((item, index) => {
-        const transcript = item.transcript || item.text || "";
-        const title = item.video_name || item.file_name || "Adsiz kayit";
-        const platform = item.platform || "bilinmiyor";
-        const engine = item.engine || "bilinmiyor";
-        return `
-          <div class="history-card">
-            <div class="history-head">
-              <div>
-                <div class="history-title">${escapeHtml(title)}</div>
-                <div class="history-meta">${escapeHtml(platform)} · ${escapeHtml(engine)} · ${escapeHtml(formatHistoryDate(item.created_at))}</div>
+      list.innerHTML = historyItems.map((item, index) => `
+        <article class="card">
+          <div class="head">
+            <div>
+              <div class="title">${escapeHtml(item.video_name || item.file_name || item.video_id || "Adsiz kayit")}</div>
+              <div class="meta">
+                ${(item.platform || "unknown").toUpperCase()} / ${(item.source_type || "single").toUpperCase()} / ${escapeHtml(formatDate(item.created_at))}
               </div>
             </div>
-            <div class="history-text" id="historyText${index}">${escapeHtml(transcript || "Transcript yok")}</div>
-            <div class="history-actions">
-              <button class="btn" onclick="copyHistoryTranscript(${index})">Kopyala</button>
-            </div>
           </div>
-        `;
-      }).join("");
+          <div class="grid">
+            ${renderField("Kaynak", item.source_name)}
+            ${renderField("URL", item.url || item.source_url)}
+            ${renderField("Dosya", item.file_path)}
+            ${renderField("Manifest", item.manifest_path)}
+            ${renderField("Yukleyen", item.uploader)}
+            ${renderField("Indirici", item.downloader)}
+            ${renderField("Transcript", item.transcript)}
+          </div>
+          <div class="actions">
+            <button class="btn" type="button" onclick="copyItem(${index})">JSON Kopyala</button>
+          </div>
+        </article>
+      `).join("");
     }
 
     async function fetchHistory() {
-      const list = document.getElementById("historyList");
-      document.getElementById("historySummary").textContent = "Gecmis yukleniyor...";
-      list.innerHTML = `<div class="history-empty">Gecmis yukleniyor...</div>`;
+      document.getElementById("historySummary").textContent = "Kayitlar yukleniyor...";
+      document.getElementById("historyList").innerHTML = `<div class="empty">Kayitlar yukleniyor...</div>`;
       try {
         const res = await fetch("/history?limit=100");
         const data = await res.json();
@@ -422,16 +366,8 @@
         renderHistory(data.items || []);
       } catch (error) {
         document.getElementById("historySummary").textContent = "Gecmis yuklenemedi";
-        list.innerHTML = `<div class="history-empty">${escapeHtml(error.message || "Gecmis alinamadi")}</div>`;
+        document.getElementById("historyList").innerHTML = `<div class="empty">${escapeHtml(error.message || "Gecmis alinamadi")}</div>`;
       }
-    }
-
-    function copyHistoryTranscript(index) {
-      const item = historyItems[index];
-      if (!item) return;
-      const transcript = item.transcript || item.text || "";
-      if (!transcript) return;
-      navigator.clipboard.writeText(transcript).then(() => showToast("Transcript kopyalandi"));
     }
 
     fetchHistory();
