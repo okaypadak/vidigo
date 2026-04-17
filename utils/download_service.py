@@ -4,6 +4,7 @@ import os
 from utils.app_logging import log_exception, log_info
 from utils.file_utils import save_download_record, upsert_manifest_item
 from utils.video_downloader import (
+    convert_items_to_audio,
     download_instagram_profile_reels,
     download_instagram_video,
     download_youtube_playlist,
@@ -21,7 +22,7 @@ from utils.youtube_utils import (
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DOWNLOAD_ROOT = os.path.join(BASE_DIR, "downloads")
-COOKIE_ROOT = os.path.join(BASE_DIR, "cookies")
+COOKIE_ROOT = os.path.join(os.path.expanduser("~"), "cookie")
 logger = logging.getLogger(__name__)
 
 
@@ -127,7 +128,24 @@ def _persist_downloads(result):
     return result
 
 
-def download_media(url, cookie_path=None):
+def _convert_result_to_audio(result):
+    items = convert_items_to_audio(result.get("items", []))
+    converted = dict(result)
+    converted["items"] = items
+
+    download_dir = converted.get("download_dir")
+    if items:
+        first_dir = os.path.dirname(items[0].get("file_path") or "")
+        if first_dir:
+            converted["download_dir"] = first_dir if len(items) == 1 else download_dir or first_dir
+
+    downloader = converted.get("downloader") or "download"
+    if "ffmpeg" not in downloader:
+        converted["downloader"] = f"{downloader}+ffmpeg"
+    return converted
+
+
+def download_media(url, cookie_path=None, audio_only=False):
     request = classify_download_url(url)
     platform = request["platform"]
     source_type = request["source_type"]
@@ -164,6 +182,16 @@ def download_media(url, cookie_path=None):
             result = _single_result(platform, source_type, url, item, platform_dir, "instaloader")
 
     result["cookie_file"] = resolved_cookie
+    if audio_only:
+        log_info(
+            logger,
+            "Indirilen ogeler ses formatina donusturuluyor",
+            stage="download.audio",
+            platform=platform,
+            source_type=source_type,
+            item_count=len(result.get("items", [])),
+        )
+        result = _convert_result_to_audio(result)
     log_info(
         logger,
         "Indirme islemi tamamlandi, sonuc kayit asamasina geciliyor",
@@ -184,7 +212,7 @@ def batch_download_media(urls, cookie_path=None):
             continue
         try:
             log_info(logger, "Toplu indirme girdisi basladi", stage="batch.item.start", index=index, total=total_urls, url=url)
-            payload = download_media(url, cookie_path=cookie_path)
+            payload = download_media(url, cookie_path=cookie_path, audio_only=True)
             results.append(
                 {
                     "url": url,

@@ -3,6 +3,7 @@ import os
 import queue
 import shutil
 import uuid
+from datetime import datetime
 
 from flask import Flask, Response, jsonify, render_template, request, stream_with_context
 from youtube_transcript_api import (
@@ -22,9 +23,9 @@ from utils.app_logging import (
     log_info,
     log_warning,
 )
-from utils.download_service import batch_download_media, download_media
-from utils.file_utils import load_download_history, save_download_record, save_transcript_to_file
-from utils.video_downloader import build_unique_filepath, download_audio_generic
+from utils.download_service import COOKIE_ROOT, batch_download_media, classify_download_url, download_media
+from utils.file_utils import load_download_history, save_download_record, save_transcript_to_file, upsert_manifest_item
+from utils.video_downloader import build_unique_filepath, download_audio_generic, extract_instagram_shortcode, resolve_cookie_file
 from utils.youtube_utils import extract_youtube_video_id
 
 app = Flask(__name__)
@@ -67,9 +68,9 @@ def _plain_transcript(transcript):
     )
 
 
-def _download_mp3(url):
+def _download_mp3(url, cookie_path=None):
     log_info(logger, "Ses dosyasi hazirlama basladi", stage="audio.prepare", url=url, work_dir=DOWNLOAD_DIR)
-    downloaded_path = download_audio_generic(url, save_path=DOWNLOAD_DIR)
+    downloaded_path = download_audio_generic(url, save_path=DOWNLOAD_DIR, cookie_path=cookie_path)
     filename = os.path.basename(downloaded_path)
     stem, extension = os.path.splitext(filename)
     dest_path = build_unique_filepath(AUDIO_DIR, stem, extension)
@@ -173,6 +174,136 @@ def _persist_transcript(
     )
 
 
+def _save_transcript_file_only(dest_path, url, platform, engine, text, video_id=None):
+    transcript_id = video_id or str(uuid.uuid4())[:8]
+    payload = {
+        "engine": engine,
+        "platform": platform,
+        "url": url,
+        "video_name": _video_name_from_path(dest_path),
+        "file_name": os.path.basename(dest_path),
+        "file_path": dest_path,
+        "text": text,
+        "transcript": text,
+    }
+    if video_id:
+        payload["video_id"] = video_id
+    save_transcript_to_file(transcript_id, payload)
+    return transcript_id
+
+
+def _attach_item_transcripts(result):
+    if result.get("status") != "success":
+        return result
+
+    items = result.get("items") or []
+    if not items:
+        return result
+
+    platform = result.get("platform")
+    source_type = result.get("source_type")
+    source_name = result.get("source_name")
+    source_url = result.get("source_url") or result.get("url")
+    downloader = result.get("downloader")
+    download_dir = result.get("download_dir")
+    transcript_count = 0
+
+    for item in items:
+        file_path = item.get("file_path")
+        if not file_path or not os.path.isfile(file_path):
+            item["transcript_error"] = "Ses dosyasi bulunamadi."
+            continue
+
+        try:
+            text = _whisper(file_path)
+            item["engine"] = "whisper"
+            item["transcript"] = text
+            transcript_count += 1
+            video_id = item.get("video_id") or item.get("shortcode") or item.get("id")
+            _save_transcript_file_only(file_path, item.get("webpage_url") or item.get("source_url") or source_url, platform, "whisper", text, video_id=video_id)
+            manifest_path, _ = upsert_manifest_item(
+                platform,
+                source_name,
+                source_type,
+                source_url,
+                item,
+                downloader=downloader,
+                download_dir=download_dir,
+                engine="whisper",
+            )
+            if manifest_path:
+                result["manifest_path"] = manifest_path
+        except Exception as exc:
+            item["transcript_error"] = f"Whisper hatasi: {str(exc)}"
+            log_exception(
+                logger,
+                "Batch download item transkripsiyonu basarisiz oldu",
+                stage="batch.item.transcribe",
+                url=item.get("webpage_url") or item.get("source_url") or source_url,
+                file_path=file_path,
+            )
+
+    result["transcribed_count"] = transcript_count
+    if transcript_count:
+        result["engine"] = "whisper"
+    return result
+
+
+def _single_audio_payload(url, cookie_path=None):
+    request = classify_download_url(url)
+    if request["source_type"] not in {"video", "reel"}:
+        return download_media(url, cookie_path=cookie_path)
+
+    platform = request["platform"]
+    source_type = request["source_type"]
+    resolved_cookie = resolve_cookie_file(platform, cookie_path=cookie_path, cookie_dir=COOKIE_ROOT)
+    dest_path = _download_mp3(url, cookie_path=cookie_path)
+    text = _whisper(dest_path)
+    video_id = extract_youtube_video_id(url) if platform == "youtube" else extract_instagram_shortcode(url)
+    source_name = _video_name_from_path(dest_path)
+
+    _persist_transcript(dest_path, url, platform, "whisper", text, video_id=video_id)
+
+    item = {
+        "id": video_id,
+        "video_id": video_id,
+        "shortcode": video_id if platform == "instagram" else None,
+        "title": source_name,
+        "platform": platform,
+        "source_url": url,
+        "webpage_url": url,
+        "file_name": os.path.basename(dest_path),
+        "file_path": dest_path,
+        "downloaded_at": datetime.now().isoformat(),
+        "engine": "whisper",
+        "transcript": text,
+    }
+    manifest_path, _ = upsert_manifest_item(
+        platform,
+        source_name,
+        source_type,
+        url,
+        item,
+        downloader="audio+whisper",
+        download_dir=os.path.dirname(dest_path),
+        engine="whisper",
+    )
+
+    return {
+        "platform": platform,
+        "source_type": source_type,
+        "source_name": source_name,
+        "source_url": url,
+        "download_dir": os.path.dirname(dest_path),
+        "manifest_path": manifest_path,
+        "cookie_file": resolved_cookie,
+        "downloader": "audio+whisper",
+        "engine": "whisper",
+        "item_count": 1,
+        "items": [item],
+    }
+
+
 @app.route("/", methods=["GET"])
 def index():
     return render_template("index.html")
@@ -252,7 +383,7 @@ def download_media_route():
     try:
         with bind_operation(operation_id):
             log_info(logger, "Tekli indirme istegi alindi", stage="request.accepted", url=url, cookie_path=cookie_path or "auto")
-            payload = download_media(url, cookie_path=cookie_path)
+            payload = _single_audio_payload(url, cookie_path=cookie_path)
             log_info(
                 logger,
                 "Tekli indirme istegi tamamlandi",
@@ -291,6 +422,7 @@ def batch_download_route():
                 cookie_path=cookie_path or "auto",
             )
             payload = batch_download_media(urls, cookie_path=cookie_path)
+            payload["results"] = [_attach_item_transcripts(result) for result in payload.get("results", [])]
             log_info(
                 logger,
                 "Toplu indirme tamamlandi",

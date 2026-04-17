@@ -48,9 +48,10 @@
     .wrap {
       position: relative;
       z-index: 1;
-      max-width: 980px;
-      margin: 0 auto;
-      padding: 42px 18px 90px;
+      width: 100%;
+      max-width: none;
+      margin: 0;
+      padding: 42px clamp(18px, 3vw, 40px) 90px;
     }
 
     .hero {
@@ -73,7 +74,7 @@
     .sub {
       margin-top: 10px;
       color: var(--muted);
-      max-width: 760px;
+      max-width: none;
       line-height: 1.65;
       font-size: 0.96rem;
     }
@@ -411,8 +412,8 @@
     <div class="hero">
       <h1 class="brand">VIDIGO</h1>
       <div class="sub">
-        Instagram hesap URL'si girilirse hesapta gorunen reels/videolar toplu iner. Instagram reel URL'si girilirse tek video iner.
-        YouTube playlist URL'si girilirse tum playlist iner. Tek video URL'si girilirse yalnizca o video iner.
+        Instagram hesap URL'si girilirse hesapta gorunen reels/videolar toplu indirilir ve batch akista her oge m4a olarak saklanir. Instagram reel URL'si girilirse tekli akista video tutulmaz, m4a dosyasi kalir ve Whisper metni ciktiya yazilir.
+        YouTube playlist URL'si girilirse tum playlist batch akista m4a olarak iner. Tek video URL'si girilirse video yerine m4a saklanir ve Whisper transkripti ciktiya eklenir.
         Her islem platform ve kaynak adina gore ayri manifest JSON'a kaydedilir.
       </div>
     </div>
@@ -444,7 +445,7 @@
           <button class="btn btn-ghost" type="button" onclick="copyResult()">Ciktiyi Kopyala</button>
         </div>
         <div class="hint">
-          Cookie gerekiyorsa repo icinde <code>cookies/youtube.txt</code> ve <code>cookies/instagram.txt</code> dosyalarini kullanir.
+          Cookie gerekiyorsa <code>~/cookie/youtube.txt</code> ve <code>~/cookie/instagram.txt</code> dosyalarini kullanir.
         </div>
       </section>
 
@@ -453,6 +454,9 @@
         <div class="file-box">
           <label class="file-label" for="batchJsonInput">JSON dosyasi sec</label>
           <input type="file" id="batchJsonInput" accept=".json" onchange="loadBatchJson(this)" />
+          <div class="hint" style="margin-top: 12px;">
+            Batch indirme akisi mp4 tutmaz, indirilen her ogeyi m4a olarak kaydeder.
+          </div>
           <div class="hint" style="margin-top: 12px;">
             Desteklenen formatlar:
             <code>{"urls":["..."]}</code>

@@ -4,7 +4,9 @@ import os
 import re
 import subprocess
 from datetime import datetime
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 import instaloader
 import yt_dlp
@@ -104,10 +106,65 @@ def extract_instagram_username(url):
     return username
 
 
-def resolve_cookie_file(platform, cookie_path=None, cookie_dir="cookies"):
+def _instagram_public_profile_status(username):
+    profile_url = f"https://www.instagram.com/{username}/"
+    request = Request(
+        profile_url,
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36"
+            )
+        },
+    )
+    try:
+        with urlopen(request, timeout=15) as response:
+            return response.status
+    except HTTPError as exc:
+        return exc.code
+    except URLError:
+        return None
+
+
+def _raise_instagram_profile_lookup_error(username, cookie_path):
+    status = _instagram_public_profile_status(username)
+    log_warning(
+        logger,
+        "Instagram profil metadata sorgusu basarisiz oldu",
+        stage="instagram.profile",
+        username=username,
+        public_status=status or "unreachable",
+        cookie_file=cookie_path or "yok",
+    )
+
+    if status == 404:
+        raise ValueError(f"Instagram profili bulunamadi: {username}")
+
+    if status in (200, 401, 403, 429):
+        if cookie_path:
+            raise ValueError(
+                "Instagram profil URL'si tanindi ancak reels listesi alinmadi. "
+                "Instagram anonim GraphQL erisimini engelledi veya cookie gecersiz/eskimis olabilir. "
+                "~/cookie/instagram.txt dosyasini yenileyip tekrar deneyin."
+            )
+        raise ValueError(
+            "Instagram profil URL'si tanindi ancak reels listesi alinmadi. "
+            "Instagram bu profil icin giris gerektiriyor veya anonim GraphQL erisimini engelliyor. "
+            "~/cookie/instagram.txt ekleyip tekrar deneyin."
+        )
+
+    raise ValueError(
+        "Instagram profil URL'si tanindi ancak profil reels verisi su an alinamadi. "
+        "Instagram tarafinda gecici engel veya baglanti sorunu olabilir."
+    )
+
+
+def resolve_cookie_file(platform, cookie_path=None, cookie_dir="~/cookie"):
     candidates = []
     if cookie_path:
         candidates.append(cookie_path)
+
+    expanded_cookie_dir = os.path.abspath(os.path.expanduser(cookie_dir))
 
     base_names = {
         "youtube": ("youtube.txt", "youtube_cookies.txt", "cookies.txt"),
@@ -115,7 +172,7 @@ def resolve_cookie_file(platform, cookie_path=None, cookie_dir="cookies"):
     }.get(platform, ("cookies.txt",))
 
     for name in base_names:
-        candidates.append(os.path.join(cookie_dir, name))
+        candidates.append(os.path.join(expanded_cookie_dir, name))
 
     for candidate in candidates:
         if candidate and os.path.isfile(candidate):
@@ -186,10 +243,37 @@ def _apply_instagram_cookiefile(loader, cookie_path):
 
     cookie_jar = http.cookiejar.MozillaCookieJar(cookie_path)
     cookie_jar.load(ignore_discard=True, ignore_expires=True)
-    session = loader.context._session
+    cookie_map = {}
     for cookie in cookie_jar:
-        session.cookies.set_cookie(cookie)
-    log_info(logger, "Instagram cookie dosyasi oturuma yuklendi", stage="instagram.session", cookie_file=cookie_path)
+        if cookie.name and cookie.value:
+            cookie_map[cookie.name] = cookie.value
+
+    loader.context.update_cookies(cookie_map)
+
+    csrf_token = cookie_map.get("csrftoken")
+    if csrf_token:
+        loader.context._session.headers.update({"X-CSRFToken": csrf_token})
+
+    username = loader.test_login()
+    if not username:
+        raise ValueError(
+            "Instagram cookie dosyasi yuklendi ancak oturum dogrulanamadi. "
+            "~/cookie/instagram.txt dosyasini yenileyin."
+        )
+
+    loader.context.username = username
+    ds_user_id = cookie_map.get("ds_user_id")
+    if ds_user_id and str(ds_user_id).isdigit():
+        loader.context.user_id = int(ds_user_id)
+
+    log_info(
+        logger,
+        "Instagram cookie dosyasi oturuma yuklendi ve dogrulandi",
+        stage="instagram.session",
+        cookie_file=cookie_path,
+        username=username,
+        user_id=loader.context.user_id or "yok",
+    )
 
 
 def _build_instaloader(output_dir, cookie_path=None):
@@ -392,7 +476,10 @@ def download_instagram_profile_reels(url, save_path="downloads", cookie_path=Non
     account_dir = os.path.abspath(os.path.join(save_path, sanitize_filename(username)))
     log_info(logger, "Instagram profil reels akisi basladi", stage="instagram.profile", url=url, username=username, account_dir=account_dir)
     loader = _build_instaloader(account_dir, cookie_path=cookie_path)
-    profile = instaloader.Profile.from_username(loader.context, username)
+    try:
+        profile = instaloader.Profile.from_username(loader.context, username)
+    except instaloader.exceptions.ProfileNotExistsException:
+        _raise_instagram_profile_lookup_error(username, cookie_path)
 
     posts = profile.get_reels() if hasattr(profile, "get_reels") else profile.get_posts()
     items = []
@@ -435,6 +522,46 @@ def download_instagram_audio(url, save_path="downloads", codec="m4a", cookie_pat
 
     log_info(logger, "Instagram ses cikarma akisi tamamlandi", stage="instagram.audio", audio_path=audio_path)
     return audio_path
+
+
+def convert_items_to_audio(items, codec="m4a"):
+    converted_items = []
+    for item in items or []:
+        item_copy = dict(item)
+        file_path = item_copy.get("file_path")
+        if not file_path:
+            converted_items.append(item_copy)
+            continue
+
+        abs_file_path = os.path.abspath(file_path)
+        if not os.path.isfile(abs_file_path):
+            item_copy["file_path"] = abs_file_path
+            item_copy["file_name"] = os.path.basename(abs_file_path)
+            converted_items.append(item_copy)
+            continue
+
+        extension = os.path.splitext(abs_file_path)[1].lower()
+        if extension == f".{codec.lower()}":
+            item_copy["file_path"] = abs_file_path
+            item_copy["file_name"] = os.path.basename(abs_file_path)
+            converted_items.append(item_copy)
+            continue
+
+        stem = os.path.splitext(os.path.basename(abs_file_path))[0]
+        audio_path = build_unique_filepath(os.path.dirname(abs_file_path), stem, f".{codec}")
+        _extract_audio_to_m4a(abs_file_path, audio_path)
+
+        try:
+            os.remove(abs_file_path)
+            log_info(logger, "Gecici video dosyasi silindi", stage="audio.batch", video_path=abs_file_path, audio_path=audio_path)
+        except OSError:
+            log_warning(logger, "Gecici video dosyasi silinemedi", stage="audio.batch", video_path=abs_file_path, audio_path=audio_path)
+
+        item_copy["file_path"] = audio_path
+        item_copy["file_name"] = os.path.basename(audio_path)
+        converted_items.append(item_copy)
+
+    return converted_items
 
 
 def _build_ytdlp_video_options(abs_save_path, cookie_path=None, allow_playlist=False):
@@ -605,7 +732,7 @@ def download_youtube_playlist(url, save_path="downloads", cookie_path=None):
     }
 
 
-def download_audio_generic(url, save_path="downloads", codec="m4a"):
+def download_audio_generic(url, save_path="downloads", codec="m4a", cookie_path=None):
     abs_save_path = os.path.abspath(save_path)
     os.makedirs(abs_save_path, exist_ok=True)
     log_info(logger, "Genel ses indirme akisi basladi", stage="audio.generic", url=url, codec=codec, save_path=abs_save_path)
@@ -615,7 +742,7 @@ def download_audio_generic(url, save_path="downloads", codec="m4a"):
             url,
             save_path=abs_save_path,
             codec=codec,
-            cookie_path=resolve_cookie_file("instagram"),
+            cookie_path=resolve_cookie_file("instagram", cookie_path=cookie_path),
         )
 
     ffmpeg_dir = get_ffmpeg_dir()
@@ -636,7 +763,7 @@ def download_audio_generic(url, save_path="downloads", codec="m4a"):
         "no_warnings": True,
         "logger": YtDlpMessageBridge("audio.engine"),
         "windowsfilenames": True,
-        "cookiefile": resolve_cookie_file("youtube"),
+        "cookiefile": resolve_cookie_file("youtube", cookie_path=cookie_path),
         "http_headers": {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
