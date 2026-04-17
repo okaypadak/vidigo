@@ -6,9 +6,10 @@ from datetime import datetime
 
 from tinydb import TinyDB
 
-TRANSCRIPT_DIR = "transcripts"
+_BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+TRANSCRIPT_DIR = os.path.join(_BASE_DIR, "transcripts")
 DOWNLOAD_DB_PATH = os.path.join(TRANSCRIPT_DIR, "download_history.json")
-DOWNLOAD_MANIFEST_DIR = os.path.join("downloads", "manifests")
+DOWNLOAD_MANIFEST_DIR = os.path.join(_BASE_DIR, "downloads", "manifests")
 os.makedirs(TRANSCRIPT_DIR, exist_ok=True)
 os.makedirs(DOWNLOAD_MANIFEST_DIR, exist_ok=True)
 
@@ -33,6 +34,37 @@ def save_download_record(video_name, transcript=None, **extra_fields):
         record["transcript"] = transcript
     record.update({key: value for key, value in extra_fields.items() if value is not None})
     download_db.insert(record)
+    return record
+
+
+def upsert_download_record(video_name, transcript=None, **extra_fields):
+    from tinydb import Query
+    fields = {key: value for key, value in extra_fields.items() if value is not None}
+    record = {"video_name": video_name}
+    if transcript is not None:
+        record["transcript"] = transcript
+    record.update(fields)
+
+    Q = Query()
+    existing = None
+    for field, value in [
+        ("video_id", fields.get("video_id")),
+        ("shortcode", fields.get("shortcode")),
+        ("file_path", fields.get("file_path")),
+        ("url", fields.get("url")),
+    ]:
+        if value:
+            results = download_db.search(Q[field] == value)
+            if results:
+                existing = results[0]
+                break
+
+    if existing:
+        record["updated_at"] = datetime.now().isoformat()
+        download_db.update(record, doc_ids=[existing.doc_id])
+    else:
+        record["created_at"] = datetime.now().isoformat()
+        download_db.insert(record)
     return record
 
 

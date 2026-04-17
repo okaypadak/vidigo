@@ -420,7 +420,6 @@
 
     <div class="nav">
       <button type="button" onclick="document.getElementById('singlePanel').scrollIntoView({ behavior: 'smooth' })">Tek URL</button>
-      <button type="button" onclick="document.getElementById('batchPanel').scrollIntoView({ behavior: 'smooth' })">Toplu</button>
       <button type="button" onclick="document.getElementById('outputPanel').scrollIntoView({ behavior: 'smooth' })">Cikti</button>
       <a href="/history_page">Gecmis</a>
       <div class="status">
@@ -449,36 +448,15 @@
         </div>
       </section>
 
-      <section class="panel" id="batchPanel">
-        <div class="eyebrow"><span>02</span> Toplu JSON</div>
-        <div class="file-box">
-          <label class="file-label" for="batchJsonInput">JSON dosyasi sec</label>
-          <input type="file" id="batchJsonInput" accept=".json" onchange="loadBatchJson(this)" />
-          <div class="hint" style="margin-top: 12px;">
-            Batch indirme akisi mp4 tutmaz, indirilen her ogeyi m4a olarak kaydeder.
-          </div>
-          <div class="hint" style="margin-top: 12px;">
-            Desteklenen formatlar:
-            <code>{"urls":["..."]}</code>
-            veya eski format olarak
-            <code>{"profile":"kanal","videos":["..."]}</code>
-          </div>
-        </div>
-        <div id="batchInfo" class="summary"></div>
-        <div class="actions">
-          <button class="btn btn-secondary" id="batchStartBtn" type="button" onclick="startBatch()" disabled>Toplu Indir</button>
-          <button class="btn btn-ghost" id="batchDownloadBtn" type="button" onclick="downloadBatchResult()" style="display:none;">JSON Indir</button>
-        </div>
-      </section>
     </div>
 
     <section class="panel-wide" id="outputPanel">
-      <div class="eyebrow"><span>03</span> Cikti</div>
+      <div class="eyebrow"><span>02</span> Cikti</div>
       <textarea id="result" placeholder="> indirme ozeti ve manifest detaylari burada gorunecek"></textarea>
     </section>
 
     <section class="panel-wide" id="logPanel">
-      <div class="eyebrow"><span>04</span> Canli Log</div>
+      <div class="eyebrow"><span>03</span> Canli Log</div>
       <div class="log-meta">
         <div class="log-state">
           <div class="dot" id="logDot"></div>
@@ -493,8 +471,6 @@
   <div id="toast" class="toast"></div>
 
   <script>
-    let batchData = null;
-    let batchResult = null;
     let toastTimer;
     let liveLogSource = null;
     let liveLogCloseTimer = null;
@@ -617,7 +593,6 @@
         if (!res.ok || data.error) {
           throw new Error(data.error || "Indirme basarisiz");
         }
-        batchResult = null;
         setResult(data);
         showToast(`Tamamlandi: ${data.item_count || 0} oge`, "ok");
         finishLiveLog("ISLEM BITTI");
@@ -632,97 +607,6 @@
       const value = document.getElementById("result").value;
       if (!value) return;
       navigator.clipboard.writeText(value).then(() => showToast("Cikti kopyalandi", "ok"));
-    }
-
-    function loadBatchJson(input) {
-      if (!input.files.length) return;
-      const reader = new FileReader();
-      const info = document.getElementById("batchInfo");
-
-      reader.onload = event => {
-        try {
-          const parsed = JSON.parse(event.target.result);
-          const urls = Array.isArray(parsed.urls) ? parsed.urls : (Array.isArray(parsed.videos) ? parsed.videos : []);
-          batchData = {
-            profile: parsed.profile || parsed.source_name || "",
-            urls
-          };
-
-          if (!urls.length) {
-            throw new Error("JSON icinde url listesi bulunamadi");
-          }
-
-          info.style.display = "block";
-          info.textContent = `${batchData.profile ? batchData.profile + " / " : ""}${urls.length} URL hazir`;
-          document.getElementById("batchStartBtn").disabled = false;
-          showToast("Toplu JSON yuklendi", "ok");
-        } catch (error) {
-          batchData = null;
-          info.style.display = "block";
-          info.textContent = error.message || "Gecersiz JSON";
-          document.getElementById("batchStartBtn").disabled = true;
-          showToast(error.message || "Gecersiz JSON", "err");
-        }
-      };
-
-      reader.readAsText(input.files[0]);
-    }
-
-    async function startBatch() {
-      if (!batchData || !batchData.urls.length) {
-        showToast("Toplu islem icin JSON gerekli", "err");
-        return;
-      }
-
-      document.getElementById("batchStartBtn").disabled = true;
-      document.getElementById("batchDownloadBtn").style.display = "none";
-      setResult("");
-      const operationId = createOperationId();
-      startLiveLog(operationId);
-      showToast("Toplu indirme basladi");
-
-      try {
-        const res = await fetch("/batch_download", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Operation-Id": operationId
-          },
-          body: JSON.stringify({ urls: batchData.urls })
-        });
-        const data = await res.json();
-        if (!res.ok || data.error) {
-          throw new Error(data.error || "Toplu indirme basarisiz");
-        }
-
-        batchResult = {
-          profile: batchData.profile,
-          processed_at: new Date().toISOString(),
-          ...data
-        };
-        setResult(batchResult);
-        document.getElementById("batchDownloadBtn").style.display = "inline-flex";
-        showToast(`Tamamlandi: ${data.success}/${data.total}`, "ok");
-        finishLiveLog("ISLEM BITTI");
-      } catch (error) {
-        setResult({ error: error.message || "Toplu indirme basarisiz" });
-        showToast(error.message || "Toplu indirme basarisiz", "err");
-        finishLiveLog("ISLEM HATA ILE BITTI");
-      } finally {
-        document.getElementById("batchStartBtn").disabled = false;
-      }
-    }
-
-    function downloadBatchResult() {
-      if (!batchResult) return;
-      const blob = new Blob([JSON.stringify(batchResult, null, 2)], { type: "application/json" });
-      const link = document.createElement("a");
-      link.href = URL.createObjectURL(blob);
-      link.download = `${batchResult.profile || "batch-download"}_result.json`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(link.href);
     }
 
     checkGpuStatus();

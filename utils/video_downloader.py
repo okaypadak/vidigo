@@ -11,7 +11,7 @@ from urllib.request import Request, urlopen
 import instaloader
 import yt_dlp
 
-from utils.app_logging import log_info, log_warning
+from utils.app_logging import log_exception, log_info, log_warning
 from utils.ffmpeg_utils import get_ffmpeg_binary, get_ffmpeg_dir
 from utils.youtube_utils import extract_youtube_playlist_id
 
@@ -468,7 +468,7 @@ def download_instagram_video(url, save_path="downloads", cookie_path=None):
     return item
 
 
-def download_instagram_profile_reels(url, save_path="downloads", cookie_path=None):
+def download_instagram_profile_reels(url, save_path="downloads", cookie_path=None, audio_only=False, item_callback=None):
     username = extract_instagram_username(url)
     if not username:
         raise ValueError("Instagram hesap URL'si bekleniyor.")
@@ -483,19 +483,112 @@ def download_instagram_profile_reels(url, save_path="downloads", cookie_path=Non
 
     posts = profile.get_reels() if hasattr(profile, "get_reels") else profile.get_posts()
     items = []
-    for index, post in enumerate(posts, start=1):
+    errors = []
+    index = 0
+    post_iterator = iter(posts)
+    while True:
+        try:
+            post = next(post_iterator)
+        except StopIteration:
+            break
+        except Exception as exc:
+            errors.append(
+                {
+                    "stage": "iterate",
+                    "error": str(exc),
+                }
+            )
+            log_exception(
+                logger,
+                "Instagram reels listesi okunurken hata olustu",
+                stage="instagram.profile",
+                username=username,
+            )
+            break
+
+        index += 1
         if not _is_reel_candidate(post):
             continue
 
-        log_info(logger, "Instagram profilindeki reel indiriliyor", stage="instagram.profile", username=username, index=index, shortcode=post.shortcode)
-        video_path = _download_instaloader_post(loader, post, account_dir, sanitize_filename(username))
-        if not video_path:
-            log_warning(logger, "Instagram reel indirme sonrasi dosya bulunamadi", stage="instagram.profile", username=username, shortcode=post.shortcode)
-            continue
-        items.append(_instagram_item_from_post(post, video_path))
+        shortcode = getattr(post, "shortcode", None) or f"index-{index}"
+        try:
+            log_info(
+                logger,
+                "Instagram profilindeki reel indiriliyor",
+                stage="instagram.profile",
+                username=username,
+                index=index,
+                shortcode=shortcode,
+            )
+            video_path = _download_instaloader_post(loader, post, account_dir, sanitize_filename(username))
+            if not video_path:
+                log_warning(
+                    logger,
+                    "Instagram reel indirme sonrasi dosya bulunamadi",
+                    stage="instagram.profile",
+                    username=username,
+                    shortcode=shortcode,
+                )
+                errors.append(
+                    {
+                        "shortcode": shortcode,
+                        "stage": "download",
+                        "error": "Instaloader video dosyasini indirmedi.",
+                    }
+                )
+                continue
 
-    log_info(logger, "Instagram profil reels akisi tamamlandi", stage="instagram.profile", username=username, item_count=len(items))
-    return {
+            if audio_only:
+                stem = os.path.splitext(os.path.basename(video_path))[0]
+                audio_path = build_unique_filepath(os.path.dirname(video_path), stem, ".m4a")
+                _extract_audio_to_m4a(video_path, audio_path)
+                try:
+                    os.remove(video_path)
+                    log_info(logger, "Gecici video dosyasi silindi", stage="instagram.profile", video_path=video_path)
+                except OSError:
+                    log_warning(logger, "Gecici video dosyasi silinemedi", stage="instagram.profile", video_path=video_path)
+                item = _instagram_item_from_post(post, audio_path)
+            else:
+                item = _instagram_item_from_post(post, video_path)
+
+            items.append(item)
+            if item_callback:
+                item_callback(
+                    item,
+                    platform="instagram",
+                    source_type="profile_reels",
+                    source_name=username,
+                    source_url=f"https://www.instagram.com/{username}/",
+                    download_dir=account_dir,
+                    downloader="instaloader",
+                )
+        except Exception as exc:
+            errors.append(
+                {
+                    "shortcode": shortcode,
+                    "stage": "item",
+                    "error": str(exc),
+                }
+            )
+            log_exception(
+                logger,
+                "Instagram profilindeki reel islenirken hata olustu",
+                stage="instagram.profile",
+                username=username,
+                index=index,
+                shortcode=shortcode,
+            )
+            continue
+
+    log_info(
+        logger,
+        "Instagram profil reels akisi tamamlandi",
+        stage="instagram.profile",
+        username=username,
+        item_count=len(items),
+        failed_count=len(errors),
+    )
+    result = {
         "platform": "instagram",
         "source_type": "profile_reels",
         "source_name": username,
@@ -503,6 +596,10 @@ def download_instagram_profile_reels(url, save_path="downloads", cookie_path=Non
         "download_dir": account_dir,
         "items": items,
     }
+    if errors:
+        result["errors"] = errors
+        result["failed_count"] = len(errors)
+    return result
 
 
 def download_instagram_audio(url, save_path="downloads", codec="m4a", cookie_path=None):

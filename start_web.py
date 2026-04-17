@@ -23,8 +23,8 @@ from utils.app_logging import (
     log_info,
     log_warning,
 )
-from utils.download_service import COOKIE_ROOT, batch_download_media, classify_download_url, download_media
-from utils.file_utils import load_download_history, save_download_record, save_transcript_to_file, upsert_manifest_item
+from utils.download_service import COOKIE_ROOT, classify_download_url, download_media
+from utils.file_utils import load_download_history, save_download_record, save_transcript_to_file, upsert_download_record, upsert_manifest_item
 from utils.video_downloader import build_unique_filepath, download_audio_generic, extract_instagram_shortcode, resolve_cookie_file
 from utils.youtube_utils import extract_youtube_video_id
 
@@ -192,8 +192,104 @@ def _save_transcript_file_only(dest_path, url, platform, engine, text, video_id=
     return transcript_id
 
 
+def _persist_downloaded_item(item, *, platform, source_type, source_name, source_url, download_dir, downloader):
+    file_path = item.get("file_path")
+    if not file_path or not os.path.isfile(file_path):
+        item["transcript_error"] = "Ses dosyasi bulunamadi."
+        return None
+
+    if item.get("transcript") and item.get("engine"):
+        return item.get("manifest_path")
+
+    item_url = item.get("webpage_url") or item.get("source_url") or source_url
+    video_id = item.get("video_id") or item.get("shortcode") or item.get("id")
+
+    try:
+        text = _whisper(file_path)
+        item["engine"] = "whisper"
+        item["transcript"] = text
+    except Exception as exc:
+        item["transcript_error"] = f"Whisper hatasi: {str(exc)}"
+        log_exception(
+            logger,
+            "Indirilen oge aninda transkribe edilemedi",
+            stage="batch.item.transcribe",
+            url=item_url,
+            file_path=file_path,
+        )
+        return None
+
+    try:
+        _save_transcript_file_only(file_path, item_url, platform, "whisper", text, video_id=video_id)
+        log_info(
+            logger,
+            "Transkript dosyasi yazildi",
+            stage="batch.item.save",
+            file_path=file_path,
+            transcript_id=video_id or "-",
+        )
+    except Exception:
+        log_exception(logger, "Transkript dosyasi kaydedilemedi", stage="batch.item.save", file_path=file_path)
+
+    manifest_path = None
+    try:
+        manifest_path, _ = upsert_manifest_item(
+            platform,
+            source_name,
+            source_type,
+            source_url,
+            item,
+            downloader=downloader,
+            download_dir=download_dir,
+            engine="whisper",
+        )
+        if manifest_path:
+            item["manifest_path"] = manifest_path
+            log_info(logger, "Manifest guncellendi", stage="batch.item.manifest", file_path=file_path, manifest_path=manifest_path)
+    except Exception:
+        log_exception(logger, "Manifest guncellenemedi", stage="batch.item.manifest", file_path=file_path)
+
+    try:
+        upsert_download_record(
+            video_name=_video_name_from_path(file_path),
+            transcript=text,
+            platform=platform,
+            source_type=source_type,
+            source_name=source_name,
+            source_url=source_url,
+            engine="whisper",
+            url=item_url,
+            video_id=video_id,
+            shortcode=item.get("shortcode"),
+            file_name=os.path.basename(file_path),
+            file_path=file_path,
+            uploader=item.get("uploader"),
+            downloader=downloader,
+            manifest_path=manifest_path,
+        )
+        log_info(
+            logger,
+            "TinyDB kaydi yazildi",
+            stage="batch.item.db",
+            file_path=file_path,
+            video_id=video_id or "-",
+        )
+    except Exception:
+        log_exception(logger, "TinyDB kaydi guncellenemedi", stage="batch.item.db", file_path=file_path)
+
+    log_info(
+        logger,
+        "Tekil indirme zinciri tamamlandi",
+        stage="batch.item.done",
+        url=item_url,
+        file_path=file_path,
+        video_id=video_id or "-",
+    )
+    return manifest_path
+
+
 def _attach_item_transcripts(result):
-    if result.get("status") != "success":
+    if result.get("status") not in (None, "success"):
         return result
 
     items = result.get("items") or []
@@ -214,34 +310,28 @@ def _attach_item_transcripts(result):
             item["transcript_error"] = "Ses dosyasi bulunamadi."
             continue
 
-        try:
-            text = _whisper(file_path)
-            item["engine"] = "whisper"
-            item["transcript"] = text
+        if item.get("transcript") and item.get("engine"):
             transcript_count += 1
-            video_id = item.get("video_id") or item.get("shortcode") or item.get("id")
-            _save_transcript_file_only(file_path, item.get("webpage_url") or item.get("source_url") or source_url, platform, "whisper", text, video_id=video_id)
-            manifest_path, _ = upsert_manifest_item(
-                platform,
-                source_name,
-                source_type,
-                source_url,
+            if item.get("manifest_path"):
+                result["manifest_path"] = item["manifest_path"]
+            continue
+
+        try:
+            manifest_path = _persist_downloaded_item(
                 item,
-                downloader=downloader,
+                platform=platform,
+                source_type=source_type,
+                source_name=source_name,
+                source_url=source_url,
                 download_dir=download_dir,
-                engine="whisper",
+                downloader=downloader,
             )
+            transcript_count += 1
             if manifest_path:
                 result["manifest_path"] = manifest_path
-        except Exception as exc:
-            item["transcript_error"] = f"Whisper hatasi: {str(exc)}"
-            log_exception(
-                logger,
-                "Batch download item transkripsiyonu basarisiz oldu",
-                stage="batch.item.transcribe",
-                url=item.get("webpage_url") or item.get("source_url") or source_url,
-                file_path=file_path,
-            )
+        except Exception:
+            log_exception(logger, "Batch item persistence beklenmeyen hata verdi", stage="batch.item.persist", file_path=file_path)
+            continue
 
     result["transcribed_count"] = transcript_count
     if transcript_count:
@@ -252,7 +342,27 @@ def _attach_item_transcripts(result):
 def _single_audio_payload(url, cookie_path=None):
     request = classify_download_url(url)
     if request["source_type"] not in {"video", "reel"}:
-        return download_media(url, cookie_path=cookie_path)
+        profile_reels_state = {"transcribed_count": 0, "manifest_path": None}
+
+        def persist_item(item, **context):
+            manifest_path = _persist_downloaded_item(item, **context)
+            if item.get("transcript") and item.get("engine"):
+                profile_reels_state["transcribed_count"] += 1
+            if manifest_path:
+                profile_reels_state["manifest_path"] = manifest_path
+
+        result = download_media(
+            url,
+            cookie_path=cookie_path,
+            audio_only=True,
+            item_callback=persist_item if request["platform"] == "instagram" and request["source_type"] == "profile_reels" else None,
+        )
+        if profile_reels_state["transcribed_count"]:
+            result["transcribed_count"] = profile_reels_state["transcribed_count"]
+            result["engine"] = "whisper"
+        if profile_reels_state["manifest_path"]:
+            result["manifest_path"] = profile_reels_state["manifest_path"]
+        return _attach_item_transcripts(result)
 
     platform = request["platform"]
     source_type = request["source_type"]
@@ -400,41 +510,6 @@ def download_media_route():
         with bind_operation(operation_id):
             log_exception(logger, "Tekli indirme akisi basarisiz oldu", stage="request.failed", url=url)
         return _json_response({"error": f"Indirme hatasi: {str(exc)}"}, status=500, operation_id=operation_id)
-
-
-@app.route("/batch_download", methods=["POST"])
-def batch_download_route():
-    operation_id = _operation_id_from_request()
-    data = request.get_json(silent=True) or {}
-    urls = data.get("urls", [])
-    cookie_path = (data.get("cookie_path") or "").strip() or None
-
-    if not urls:
-        return _json_response({"error": "URL listesi bos."}, status=400, operation_id=operation_id)
-
-    try:
-        with bind_operation(operation_id):
-            log_info(
-                logger,
-                "Toplu indirme istegi alindi",
-                stage="request.accepted",
-                total_urls=len(urls),
-                cookie_path=cookie_path or "auto",
-            )
-            payload = batch_download_media(urls, cookie_path=cookie_path)
-            payload["results"] = [_attach_item_transcripts(result) for result in payload.get("results", [])]
-            log_info(
-                logger,
-                "Toplu indirme tamamlandi",
-                stage="request.completed",
-                success=payload.get("success"),
-                total=payload.get("total"),
-            )
-            return _json_response(payload, operation_id=operation_id)
-    except Exception as exc:
-        with bind_operation(operation_id):
-            log_exception(logger, "Toplu indirme akisi basarisiz oldu", stage="request.failed")
-        return _json_response({"error": f"Toplu indirme hatasi: {str(exc)}"}, status=500, operation_id=operation_id)
 
 
 @app.route("/instagram_transcribe", methods=["POST"])

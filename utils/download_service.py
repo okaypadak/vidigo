@@ -2,7 +2,7 @@ import logging
 import os
 
 from utils.app_logging import log_exception, log_info
-from utils.file_utils import save_download_record, upsert_manifest_item
+from utils.file_utils import save_download_record, upsert_download_record, upsert_manifest_item
 from utils.video_downloader import (
     convert_items_to_audio,
     download_instagram_profile_reels,
@@ -93,7 +93,7 @@ def _persist_downloads(result):
             downloader=downloader,
             download_dir=result.get("download_dir"),
         )
-        save_download_record(
+        upsert_download_record(
             video_name=item.get("title") or item.get("file_name") or item.get("video_id") or "download",
             platform=result["platform"],
             source_type=result["source_type"],
@@ -101,6 +101,7 @@ def _persist_downloads(result):
             source_url=result["source_url"],
             url=item.get("webpage_url") or item.get("source_url"),
             video_id=item.get("video_id") or item.get("shortcode"),
+            shortcode=item.get("shortcode"),
             file_name=item.get("file_name"),
             file_path=item.get("file_path"),
             uploader=item.get("uploader"),
@@ -145,7 +146,7 @@ def _convert_result_to_audio(result):
     return converted
 
 
-def download_media(url, cookie_path=None, audio_only=False):
+def download_media(url, cookie_path=None, audio_only=False, item_callback=None):
     request = classify_download_url(url)
     platform = request["platform"]
     source_type = request["source_type"]
@@ -174,7 +175,13 @@ def download_media(url, cookie_path=None, audio_only=False):
     else:
         if source_type == "profile_reels":
             log_info(logger, "Instagram profil reels indirme basladi", stage="download.execute", url=url)
-            result = download_instagram_profile_reels(url, save_path=platform_dir, cookie_path=resolved_cookie)
+            result = download_instagram_profile_reels(
+                url,
+                save_path=platform_dir,
+                cookie_path=resolved_cookie,
+                audio_only=audio_only,
+                item_callback=item_callback,
+            )
             result["downloader"] = "instaloader"
         else:
             log_info(logger, "Instagram reel indirme basladi", stage="download.execute", url=url)
@@ -182,7 +189,7 @@ def download_media(url, cookie_path=None, audio_only=False):
             result = _single_result(platform, source_type, url, item, platform_dir, "instaloader")
 
     result["cookie_file"] = resolved_cookie
-    if audio_only:
+    if audio_only and not (platform == "instagram" and source_type == "profile_reels"):
         log_info(
             logger,
             "Indirilen ogeler ses formatina donusturuluyor",
@@ -202,60 +209,3 @@ def download_media(url, cookie_path=None, audio_only=False):
     return _persist_downloads(result)
 
 
-def batch_download_media(urls, cookie_path=None):
-    results = []
-    total_urls = len(urls or [])
-    log_info(logger, "Toplu indirme dongusu basladi", stage="batch.start", total_urls=total_urls)
-    for index, raw_url in enumerate(urls or [], start=1):
-        url = (raw_url or "").strip()
-        if not url:
-            continue
-        try:
-            log_info(logger, "Toplu indirme girdisi basladi", stage="batch.item.start", index=index, total=total_urls, url=url)
-            payload = download_media(url, cookie_path=cookie_path, audio_only=True)
-            results.append(
-                {
-                    "url": url,
-                    "platform": payload.get("platform"),
-                    "source_type": payload.get("source_type"),
-                    "source_name": payload.get("source_name"),
-                    "item_count": payload.get("item_count", 0),
-                    "manifest_path": payload.get("manifest_path"),
-                    "download_dir": payload.get("download_dir"),
-                    "status": "success",
-                    "items": payload.get("items", []),
-                }
-            )
-            log_info(
-                logger,
-                "Toplu indirme girdisi tamamlandi",
-                stage="batch.item.done",
-                index=index,
-                total=total_urls,
-                url=url,
-                item_count=payload.get("item_count", 0),
-            )
-        except Exception as exc:
-            log_exception(logger, "Toplu indirme girdisi basarisiz oldu", stage="batch.item.failed", index=index, total=total_urls, url=url)
-            results.append(
-                {
-                    "url": url,
-                    "platform": None,
-                    "source_type": None,
-                    "source_name": None,
-                    "item_count": 0,
-                    "manifest_path": None,
-                    "download_dir": None,
-                    "status": "error",
-                    "error": str(exc),
-                    "items": [],
-                }
-            )
-
-    output = {
-        "total": len(results),
-        "success": sum(1 for item in results if item["status"] == "success"),
-        "results": results,
-    }
-    log_info(logger, "Toplu indirme dongusu tamamlandi", stage="batch.done", total=output["total"], success=output["success"])
-    return output
