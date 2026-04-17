@@ -12,7 +12,7 @@ from youtube_transcript_api import (
 )
 from transcribers.whisper_transcriber import transcribe_whisper
 from utils.file_utils import save_transcript_to_file
-from utils.video_downloader import download_audio_generic
+from utils.video_downloader import build_unique_filepath, download_audio_generic
 from utils.youtube_utils import extract_youtube_video_id
 
 app = Flask(__name__)
@@ -47,7 +47,9 @@ def _plain_transcript(transcript):
 
 def _download_mp3(url):
     downloaded_path = download_audio_generic(url, save_path=DOWNLOAD_DIR)
-    dest_path = os.path.join(AUDIO_DIR, os.path.basename(downloaded_path))
+    filename = os.path.basename(downloaded_path)
+    stem, extension = os.path.splitext(filename)
+    dest_path = build_unique_filepath(AUDIO_DIR, stem, extension)
     shutil.move(downloaded_path, dest_path)
     return dest_path
 

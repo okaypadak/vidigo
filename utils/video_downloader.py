@@ -1,10 +1,27 @@
 import os
+import re
 import yt_dlp
 from utils.ffmpeg_utils import get_ffmpeg_dir
 
 
 def sanitize_filename(name):
-    return ''.join(c if c.isalnum() or c in (' ', '-', '_') else '_' for c in name).replace(' ', '_')
+    cleaned = re.sub(r'[\\/:*?"<>|]+', " ", str(name or "audio"))
+    cleaned = re.sub(r"\s+", " ", cleaned).strip().rstrip(".")
+    return cleaned or "audio"
+
+
+def build_unique_filepath(directory, title, extension):
+    safe_title = sanitize_filename(title)
+    candidate = os.path.join(directory, f"{safe_title}{extension}")
+    if not os.path.exists(candidate):
+        return candidate
+
+    counter = 2
+    while True:
+        candidate = os.path.join(directory, f"{safe_title} ({counter}){extension}")
+        if not os.path.exists(candidate):
+            return candidate
+        counter += 1
 
 
 def download_audio_generic(url, save_path="downloads", codec="m4a"):
@@ -44,7 +61,7 @@ def download_audio_generic(url, save_path="downloads", codec="m4a"):
         "fragment_retries": 5,
         "format": "bestaudio[ext=m4a]/bestaudio/best",
         "paths": {"home": abs_save_path},
-        "outtmpl": "%(uploader)s-%(title)s.%(ext)s",
+        "outtmpl": "%(title)s.%(ext)s",
         "noplaylist": True,
         "postprocessor_hooks": [postprocessor_hook],
     }
@@ -58,18 +75,27 @@ def download_audio_generic(url, save_path="downloads", codec="m4a"):
         ydl_opts["http_headers"]["Referer"] = "https://www.instagram.com/"
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([url])
+        info = ydl.extract_info(url, download=True)
 
     if final_file and os.path.isfile(final_file[-1]):
-        return final_file[-1]
+        downloaded_path = final_file[-1]
+    else:
+        ext = f".{codec}"
+        audio_files = [
+            os.path.join(abs_save_path, f)
+            for f in os.listdir(abs_save_path)
+            if f.endswith(ext)
+        ]
+        if audio_files:
+            downloaded_path = max(audio_files, key=os.path.getmtime)
+        else:
+            raise FileNotFoundError("Ses dosyasi bulunamadi.")
 
-    ext = f".{codec}"
-    mp3_files = [
-        os.path.join(abs_save_path, f)
-        for f in os.listdir(abs_save_path)
-        if f.endswith(ext)
-    ]
-    if mp3_files:
-        return max(mp3_files, key=os.path.getmtime)
+    title = info.get("title") or os.path.splitext(os.path.basename(downloaded_path))[0]
+    extension = os.path.splitext(downloaded_path)[1] or f".{codec}"
+    final_path = build_unique_filepath(abs_save_path, title, extension)
 
-    raise FileNotFoundError("Ses dosyasi bulunamadi.")
+    if os.path.abspath(downloaded_path) != os.path.abspath(final_path):
+        os.replace(downloaded_path, final_path)
+
+    return final_path
