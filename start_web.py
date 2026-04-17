@@ -1,17 +1,19 @@
+import logging
 import os
 import shutil
 import uuid
-import logging
-from flask import Flask, render_template, request, jsonify
+
+from flask import Flask, jsonify, render_template, request
 from youtube_transcript_api import (
-    YouTubeTranscriptApi,
+    CouldNotRetrieveTranscript,
     NoTranscriptFound,
     TranscriptsDisabled,
     VideoUnavailable,
-    CouldNotRetrieveTranscript,
+    YouTubeTranscriptApi,
 )
+
 from transcribers.whisper_transcriber import transcribe_whisper
-from utils.file_utils import save_transcript_to_file
+from utils.file_utils import save_download_record, save_transcript_to_file
 from utils.video_downloader import build_unique_filepath, download_audio_generic
 from utils.youtube_utils import extract_youtube_video_id
 
@@ -32,7 +34,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
     handlers=[
         logging.FileHandler(LOG_PATH, encoding="utf-8"),
-        logging.StreamHandler()
+        logging.StreamHandler(),
     ],
 )
 logger = logging.getLogger(__name__)
@@ -41,7 +43,8 @@ logger = logging.getLogger(__name__)
 def _plain_transcript(transcript):
     return "\n".join(
         (item.get("text") or "").strip()
-        for item in transcript if (item.get("text") or "").strip()
+        for item in transcript
+        if (item.get("text") or "").strip()
     )
 
 
@@ -69,6 +72,47 @@ def _youtube_api(video_id):
     return _plain_transcript(transcript), transcript
 
 
+def _video_name_from_path(path):
+    return os.path.splitext(os.path.basename(path))[0]
+
+
+def _persist_transcript(
+    dest_path,
+    url,
+    platform,
+    engine,
+    text,
+    video_id=None,
+    transcript_payload=None,
+):
+    video_name = _video_name_from_path(dest_path)
+    transcript_id = video_id or str(uuid.uuid4())[:8]
+    payload = {
+        "engine": engine,
+        "platform": platform,
+        "url": url,
+        "video_name": video_name,
+        "file_name": os.path.basename(dest_path),
+        "file_path": dest_path,
+        "text": text,
+        "transcript": transcript_payload if transcript_payload is not None else text,
+    }
+    if video_id:
+        payload["video_id"] = video_id
+
+    save_transcript_to_file(transcript_id, payload)
+    save_download_record(
+        video_name=video_name,
+        transcript=text,
+        platform=platform,
+        engine=engine,
+        url=url,
+        video_id=video_id,
+        file_name=os.path.basename(dest_path),
+        file_path=dest_path,
+    )
+
+
 @app.route("/", methods=["GET"])
 def index():
     return render_template("index.html")
@@ -78,6 +122,7 @@ def index():
 def status():
     try:
         import torch
+
         gpu_available = torch.cuda.is_available()
     except ImportError:
         gpu_available = False
@@ -101,7 +146,7 @@ def instagram_transcribe():
 
     try:
         text = _whisper(dest_path)
-        save_transcript_to_file(str(uuid.uuid4())[:8], {"engine": "whisper", "transcript": text})
+        _persist_transcript(dest_path, url, "instagram", "whisper", text)
         logger.info("Whisper done: %s", dest_path)
         return jsonify({"status": "success", "engine": "whisper", "text": text})
     except Exception as e:
@@ -127,17 +172,30 @@ def youtube_transcribe():
 
     try:
         text, transcript = _youtube_api(video_id)
-        save_transcript_to_file(video_id, {"engine": "youtube_api", "video_id": video_id, "text": text, "transcript": transcript})
+        _persist_transcript(
+            dest_path,
+            url,
+            "youtube",
+            "youtube_api",
+            text,
+            video_id=video_id,
+            transcript_payload=transcript,
+        )
         logger.info("YouTube API transcript found: %s", video_id)
         return jsonify({"status": "success", "engine": "youtube_api", "text": text})
-    except (NoTranscriptFound, TranscriptsDisabled, VideoUnavailable, CouldNotRetrieveTranscript):
+    except (
+        NoTranscriptFound,
+        TranscriptsDisabled,
+        VideoUnavailable,
+        CouldNotRetrieveTranscript,
+    ):
         logger.info("YouTube API not found, falling back to Whisper: %s", dest_path)
     except Exception:
         logger.exception("YouTube API error: %s", video_id)
 
     try:
         text = _whisper(dest_path)
-        save_transcript_to_file(str(uuid.uuid4())[:8], {"engine": "whisper", "transcript": text})
+        _persist_transcript(dest_path, url, "youtube", "whisper", text, video_id=video_id)
         logger.info("Whisper fallback done: %s", dest_path)
         return jsonify({"status": "success", "engine": "whisper", "text": text})
     except Exception as e:
@@ -159,8 +217,16 @@ def batch_transcribe():
         url = url.strip()
         if not url:
             continue
+
         platform = "instagram" if "instagram.com" in url else "youtube"
-        entry = {"url": url, "platform": platform, "engine": None, "text": None, "status": "error", "error": None}
+        entry = {
+            "url": url,
+            "platform": platform,
+            "engine": None,
+            "text": None,
+            "status": "error",
+            "error": None,
+        }
 
         try:
             dest_path = _download_mp3(url)
@@ -175,19 +241,35 @@ def batch_transcribe():
                 entry["text"] = _whisper(dest_path)
                 entry["engine"] = "whisper"
                 entry["status"] = "success"
+                _persist_transcript(dest_path, url, platform, entry["engine"], entry["text"])
             except Exception as e:
                 entry["error"] = f"Whisper hatası: {str(e)}"
         else:
             video_id = extract_youtube_video_id(url)
             api_ok = False
+
             if video_id:
                 try:
                     text, transcript = _youtube_api(video_id)
                     entry["text"] = text
                     entry["engine"] = "youtube_api"
                     entry["status"] = "success"
+                    _persist_transcript(
+                        dest_path,
+                        url,
+                        platform,
+                        entry["engine"],
+                        entry["text"],
+                        video_id=video_id,
+                        transcript_payload=transcript,
+                    )
                     api_ok = True
-                except (NoTranscriptFound, TranscriptsDisabled, VideoUnavailable, CouldNotRetrieveTranscript):
+                except (
+                    NoTranscriptFound,
+                    TranscriptsDisabled,
+                    VideoUnavailable,
+                    CouldNotRetrieveTranscript,
+                ):
                     pass
                 except Exception:
                     logger.exception("Batch YouTube API error: %s", video_id)
@@ -197,6 +279,14 @@ def batch_transcribe():
                     entry["text"] = _whisper(dest_path)
                     entry["engine"] = "whisper"
                     entry["status"] = "success"
+                    _persist_transcript(
+                        dest_path,
+                        url,
+                        platform,
+                        entry["engine"],
+                        entry["text"],
+                        video_id=video_id,
+                    )
                 except Exception as e:
                     entry["error"] = f"Whisper hatası: {str(e)}"
 
