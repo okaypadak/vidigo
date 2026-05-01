@@ -19,10 +19,62 @@ def get_transcript_filepath(video_id):
     return os.path.join(TRANSCRIPT_DIR, f"{video_id}.json")
 
 
+def get_transcript_text_filepath(video_name, video_id=None):
+    base_name = _slugify(video_name) if video_name else ""
+    if not base_name and video_id:
+        base_name = _slugify(video_id)
+    if not base_name:
+        base_name = "transcript"
+    return os.path.join(TRANSCRIPT_DIR, f"{base_name}.txt")
+
+
+def get_transcript_stats_filepath(video_id):
+    return os.path.join(TRANSCRIPT_DIR, f"{video_id}.stats.json")
+
+
+def _build_transcript_stats(video_id, data, text):
+    transcript_lines = [line for line in text.splitlines() if line.strip()]
+    return {
+        "video_id": video_id,
+        "engine": data.get("engine"),
+        "platform": data.get("platform"),
+        "video_name": data.get("video_name"),
+        "url": data.get("url"),
+        "char_count": len(text),
+        "word_count": len(text.split()),
+        "line_count": len(transcript_lines),
+        "created_at": datetime.now().isoformat(),
+    }
+
+
 def save_transcript_to_file(video_id, data):
-    path = get_transcript_filepath(video_id)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    json_path = get_transcript_filepath(video_id)
+    video_name = data.get("video_name")
+    txt_path = get_transcript_text_filepath(video_name, video_id=video_id)
+    stats_path = get_transcript_stats_filepath(video_id)
+
+    text = (data.get("text") or "").strip()
+    with open(txt_path, "w", encoding="utf-8") as f:
+        f.write(text)
+
+    stats = _build_transcript_stats(video_id, data, text)
+    with open(stats_path, "w", encoding="utf-8") as f:
+        json.dump(stats, f, ensure_ascii=False, indent=2)
+
+    metadata = {
+        "video_id": video_id,
+        "video_name": video_name,
+        "platform": data.get("platform"),
+        "engine": data.get("engine"),
+        "url": data.get("url"),
+        "file_name": data.get("file_name"),
+        "file_path": data.get("file_path"),
+        "transcript_txt_path": txt_path,
+        "stats_path": stats_path,
+        "created_at": datetime.now().isoformat(),
+    }
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(metadata, f, ensure_ascii=False, indent=2)
 
 
 def save_download_record(video_name, transcript=None, **extra_fields):
@@ -156,6 +208,7 @@ def upsert_manifest_item(platform, source_name, source_type, source_url, item, *
 
     manifest["items"] = items
     manifest["item_count"] = len(items)
+    manifest["video_names"] = [item.get("video_name") for item in items if item.get("video_name")]
 
     with open(path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, ensure_ascii=False, indent=2)
