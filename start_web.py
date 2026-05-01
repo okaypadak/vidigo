@@ -437,7 +437,6 @@ def _process_audio_item(url, *, cookie_path=None, mode="download", source_type=N
     transcript_error = None
     if transcript_enabled:
         if platform == "youtube":
-            # Önce yt-dlp subtitle dene, olmazsa YouTube API'ye fallback
             try:
                 audio_dir = os.path.dirname(dest_path)
                 parent_dir = os.path.dirname(audio_dir) if os.path.basename(audio_dir).lower() == "ses" else audio_dir
@@ -449,18 +448,12 @@ def _process_audio_item(url, *, cookie_path=None, mode="download", source_type=N
                     text = open(txt_path, encoding="utf-8").read() if txt_path and os.path.isfile(txt_path) else None
                     engine = "ytdlp_subtitle"
                     log_info(logger, "yt-dlp subtitle ile transcript alindi", stage="transcribe.item", url=url)
+                else:
+                    engine = "ytdlp_subtitle"
+                    log_info(logger, "Bu video icin altyazi bulunamadi, atlaniyor", stage="transcribe.item", url=url)
             except Exception:
-                log_exception(logger, "yt-dlp subtitle basarisiz, API fallback deneniyor", stage="transcribe.item", url=url)
-            if not text and video_id:
-                try:
-                    log_info(logger, "YouTube API ile transcript deneniyor", stage="transcribe.item", video_id=video_id)
-                    _, text, transcript_payload = _transcribe_downloaded_audio(platform, dest_path, url, video_id)
-                    engine = "youtube_api"
-                except Exception as exc:
-                    transcript_error = f"Transkript hatasi: {str(exc)}"
-                    engine = "error"
-                    text = transcript_error
-                    log_exception(logger, "YouTube API de basarisiz oldu", stage="transcribe.item", url=url)
+                log_exception(logger, "yt-dlp subtitle basarisiz, transcript atlaniyor", stage="transcribe.item", url=url)
+                engine = "error"
         else:
             try:
                 engine, text, transcript_payload = _transcribe_downloaded_audio(platform, dest_path, url, video_id)
