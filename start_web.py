@@ -143,10 +143,12 @@ def _youtube_api(video_id):
         log_info(logger, "YouTube transcript API denemesi basladi", stage="transcribe.youtube_api", video_id=video_id, attempt=attempt)
         _last_youtube_transcript_request_at = time.monotonic()
         try:
-            api = YouTubeTranscriptApi()
+            cookie_file = os.path.join(os.path.expanduser("~"), "cookie", "youtube.txt")
+            cookie_arg = cookie_file if os.path.isfile(cookie_file) else None
             if hasattr(YouTubeTranscriptApi, "get_transcript"):
-                transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=["tr", "en"])
+                transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=["tr", "en"], cookies=cookie_arg) if cookie_arg else YouTubeTranscriptApi.get_transcript(video_id, languages=["tr", "en"])
             else:
+                api = YouTubeTranscriptApi(cookies=cookie_arg) if cookie_arg else YouTubeTranscriptApi()
                 fetched = api.fetch(video_id, languages=("tr", "en"))
                 transcript = fetched.to_raw_data()
             log_info(
@@ -437,6 +439,7 @@ def _process_audio_item(url, *, cookie_path=None, mode="download", source_type=N
     transcript_error = None
     if transcript_enabled:
         if platform == "youtube":
+            # 1. yt-dlp subtitle dene
             try:
                 audio_dir = os.path.dirname(dest_path)
                 parent_dir = os.path.dirname(audio_dir) if os.path.basename(audio_dir).lower() == "ses" else audio_dir
@@ -448,12 +451,17 @@ def _process_audio_item(url, *, cookie_path=None, mode="download", source_type=N
                     text = open(txt_path, encoding="utf-8").read() if txt_path and os.path.isfile(txt_path) else None
                     engine = "ytdlp_subtitle"
                     log_info(logger, "yt-dlp subtitle ile transcript alindi", stage="transcribe.item", url=url)
-                else:
-                    engine = "ytdlp_subtitle"
-                    log_info(logger, "Bu video icin altyazi bulunamadi, atlaniyor", stage="transcribe.item", url=url)
             except Exception:
-                log_exception(logger, "yt-dlp subtitle basarisiz, transcript atlaniyor", stage="transcribe.item", url=url)
-                engine = "error"
+                log_exception(logger, "yt-dlp subtitle basarisiz", stage="transcribe.item", url=url)
+            # 2. yt-dlp bulamazsa YouTube API dene
+            if not text and video_id:
+                try:
+                    _, text, transcript_payload = _youtube_api(video_id)
+                    engine = "youtube_api"
+                    log_info(logger, "YouTube API ile transcript alindi", stage="transcribe.item", video_id=video_id)
+                except Exception:
+                    engine = "error"
+                    log_warning(logger, "Transcript alinamadi, atlaniyor", stage="transcribe.item", url=url)
         else:
             try:
                 engine, text, transcript_payload = _transcribe_downloaded_audio(platform, dest_path, url, video_id)
