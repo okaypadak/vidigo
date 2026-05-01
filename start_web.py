@@ -339,7 +339,9 @@ def _attach_item_transcripts(result):
     return result
 
 
-def _single_audio_payload(url, cookie_path=None):
+def _single_audio_payload(url, cookie_path=None, mode="download"):
+    transcript_enabled = mode in {"download", "transcript_only"}
+    keep_audio_files = mode in {"download", "mp3_only"}
     request = classify_download_url(url)
     if request["source_type"] not in {"video", "reel"}:
         profile_reels_state = {"transcribed_count": 0, "manifest_path": None}
@@ -362,17 +364,28 @@ def _single_audio_payload(url, cookie_path=None):
             result["engine"] = "whisper"
         if profile_reels_state["manifest_path"]:
             result["manifest_path"] = profile_reels_state["manifest_path"]
-        return _attach_item_transcripts(result)
+        if transcript_enabled:
+            result = _attach_item_transcripts(result)
+        if not keep_audio_files:
+            for item in result.get("items") or []:
+                path = item.get("file_path")
+                if path and os.path.isfile(path):
+                    os.remove(path)
+                    item["file_path"] = None
+                    item["audio_removed"] = True
+        return result
 
     platform = request["platform"]
     source_type = request["source_type"]
     resolved_cookie = resolve_cookie_file(platform, cookie_path=cookie_path, cookie_dir=COOKIE_ROOT)
     dest_path = _download_mp3(url, cookie_path=cookie_path)
-    text = _whisper(dest_path)
     video_id = extract_youtube_video_id(url) if platform == "youtube" else extract_instagram_shortcode(url)
     source_name = _video_name_from_path(dest_path)
 
-    _persist_transcript(dest_path, url, platform, "whisper", text, video_id=video_id)
+    text = None
+    if transcript_enabled:
+        text = _whisper(dest_path)
+        _persist_transcript(dest_path, url, platform, "whisper", text, video_id=video_id)
 
     item = {
         "id": video_id,
@@ -385,7 +398,7 @@ def _single_audio_payload(url, cookie_path=None):
         "file_name": os.path.basename(dest_path),
         "file_path": dest_path,
         "downloaded_at": datetime.now().isoformat(),
-        "engine": "whisper",
+        "engine": "whisper" if transcript_enabled else None,
         "transcript": text,
     }
     manifest_path, _ = upsert_manifest_item(
@@ -396,8 +409,13 @@ def _single_audio_payload(url, cookie_path=None):
         item,
         downloader="audio+whisper",
         download_dir=os.path.dirname(dest_path),
-        engine="whisper",
+        engine="whisper" if transcript_enabled else None,
     )
+
+    if not keep_audio_files and os.path.isfile(dest_path):
+        os.remove(dest_path)
+        item["file_path"] = None
+        item["audio_removed"] = True
 
     return {
         "platform": platform,
@@ -407,8 +425,8 @@ def _single_audio_payload(url, cookie_path=None):
         "download_dir": os.path.dirname(dest_path),
         "manifest_path": manifest_path,
         "cookie_file": resolved_cookie,
-        "downloader": "audio+whisper",
-        "engine": "whisper",
+        "downloader": "audio+whisper" if transcript_enabled else "audio",
+        "engine": "whisper" if transcript_enabled else None,
         "item_count": 1,
         "items": [item],
     }
@@ -486,6 +504,7 @@ def download_media_route():
     data = request.get_json(silent=True) or {}
     url = (data.get("url") or "").strip()
     cookie_path = (data.get("cookie_path") or "").strip() or None
+    mode = (data.get("mode") or "download").strip()
 
     if not url:
         return _json_response({"error": "Indirilecek URL gerekli."}, status=400, operation_id=operation_id)
@@ -493,7 +512,9 @@ def download_media_route():
     try:
         with bind_operation(operation_id):
             log_info(logger, "Tekli indirme istegi alindi", stage="request.accepted", url=url, cookie_path=cookie_path or "auto")
-            payload = _single_audio_payload(url, cookie_path=cookie_path)
+            if mode not in {"download", "mp3_only", "transcript_only"}:
+                raise ValueError("Gecersiz mod. 'download', 'mp3_only' veya 'transcript_only' olmali.")
+            payload = _single_audio_payload(url, cookie_path=cookie_path, mode=mode)
             log_info(
                 logger,
                 "Tekli indirme istegi tamamlandi",
