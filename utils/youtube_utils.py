@@ -57,3 +57,42 @@ def extract_youtube_playlist_id(url):
 
 def is_youtube_playlist_url(url):
     return extract_youtube_playlist_id(url) is not None
+
+
+def is_youtube_channel_url(url):
+    parsed = _parse_url(url)
+    if not parsed:
+        return False
+
+    if not is_youtube_url(url):
+        return False
+
+    path = parsed.path.strip("/")
+    if not path:
+        return False
+
+    parts = path.split("/")
+    if parts[0] in ("channel", "c", "user"):
+        return len(parts) >= 2
+
+    return parts[0].startswith("@")
+
+
+def extract_youtube_channel_name(url):
+    if not is_youtube_channel_url(url):
+        return None
+
+    parsed = _parse_url(url)
+    path = parsed.path.strip("/")
+    parts = [part for part in path.split("/") if part]
+    if not parts:
+        return None
+
+    head = parts[0]
+    if head.startswith("@"):
+        return head.lstrip("@") or None
+
+    if head in ("channel", "c", "user") and len(parts) >= 2:
+        return parts[1]
+
+    return None

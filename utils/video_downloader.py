@@ -473,7 +473,12 @@ def download_instagram_profile_reels(url, save_path="downloads", cookie_path=Non
     if not username:
         raise ValueError("Instagram hesap URL'si bekleniyor.")
 
-    account_dir = os.path.abspath(os.path.join(save_path, sanitize_filename(username)))
+    base_save_path = os.path.abspath(save_path)
+    safe_username = sanitize_filename(username)
+    if os.path.basename(base_save_path) == safe_username:
+        account_dir = base_save_path
+    else:
+        account_dir = os.path.abspath(os.path.join(base_save_path, safe_username))
     log_info(logger, "Instagram profil reels akisi basladi", stage="instagram.profile", url=url, username=username, account_dir=account_dir)
     loader = _build_instaloader(account_dir, cookie_path=cookie_path)
     try:
