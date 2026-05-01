@@ -16,6 +16,7 @@ from utils.video_downloader import (
 )
 from utils.youtube_utils import (
     extract_youtube_video_id,
+    is_youtube_channel_url,
     is_youtube_playlist_url,
     is_youtube_url,
 )
@@ -34,9 +35,11 @@ def classify_download_url(url):
     if is_youtube_url(normalized):
         if is_youtube_playlist_url(normalized):
             return {"platform": "youtube", "source_type": "playlist", "url": normalized}
+        if is_youtube_channel_url(normalized):
+            return {"platform": "youtube", "source_type": "channel", "url": normalized}
         if extract_youtube_video_id(normalized):
             return {"platform": "youtube", "source_type": "video", "url": normalized}
-        raise ValueError("Gecerli bir YouTube video veya playlist URL'si girin.")
+        raise ValueError("Gecerli bir YouTube video, playlist veya kanal URL'si girin.")
 
     if is_instagram_url(normalized):
         if extract_instagram_shortcode(normalized):
@@ -164,9 +167,12 @@ def download_media(url, cookie_path=None, audio_only=False, item_callback=None):
     )
 
     if platform == "youtube":
-        if source_type == "playlist":
+        if source_type in ("playlist", "channel"):
             log_info(logger, "YouTube playlist indirme basladi", stage="download.execute", url=url)
             result = download_youtube_playlist(url, save_path=platform_dir, cookie_path=resolved_cookie)
+            result["source_type"] = source_type
+            if source_type == "channel" and result.get("source_name") == "playlist":
+                result["source_name"] = "channel"
             result["downloader"] = "yt-dlp"
         else:
             log_info(logger, "YouTube video indirme basladi", stage="download.execute", url=url)
@@ -207,5 +213,3 @@ def download_media(url, cookie_path=None, audio_only=False, item_callback=None):
         item_count=len(result.get("items", [])),
     )
     return _persist_downloads(result)
-
-

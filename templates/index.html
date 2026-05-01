@@ -413,7 +413,7 @@
       <h1 class="brand">VIDIGO</h1>
       <div class="sub">
         Instagram hesap URL'si girilirse hesapta gorunen reels/videolar toplu indirilir ve batch akista her oge m4a olarak saklanir. Instagram reel URL'si girilirse tekli akista video tutulmaz, m4a dosyasi kalir ve Whisper metni ciktiya yazilir.
-        YouTube playlist URL'si girilirse tum playlist batch akista m4a olarak iner. Tek video URL'si girilirse video yerine m4a saklanir ve Whisper transkripti ciktiya eklenir.
+        YouTube playlist veya kanal URL'si girilirse tum videolar batch akista m4a olarak iner. Tek video URL'si girilirse video yerine m4a saklanir ve Whisper transkripti ciktiya eklenir.
         Her islem platform ve kaynak adina gore ayri manifest JSON'a kaydedilir.
       </div>
     </div>
@@ -432,10 +432,11 @@
       <section class="panel" id="singlePanel">
         <div class="eyebrow"><span>01</span> Tek URL Indir</div>
         <label class="label" for="videoUrl">YouTube veya Instagram URL</label>
-        <input type="text" id="videoUrl" placeholder="ornek: https://www.instagram.com/ornekhesap/ veya https://www.youtube.com/playlist?list=..." />
+        <input type="text" id="videoUrl" placeholder="ornek: https://www.youtube.com/@kanaladi/videos veya https://www.youtube.com/playlist?list=..." />
         <div class="badge-row">
           <div class="badge">YouTube video</div>
           <div class="badge">YouTube playlist</div>
+          <div class="badge">YouTube channel</div>
           <div class="badge">Instagram reel</div>
           <div class="badge">Instagram hesap</div>
         </div>

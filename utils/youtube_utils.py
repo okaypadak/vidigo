@@ -57,3 +57,22 @@ def extract_youtube_playlist_id(url):
 
 def is_youtube_playlist_url(url):
     return extract_youtube_playlist_id(url) is not None
+
+
+def is_youtube_channel_url(url):
+    parsed = _parse_url(url)
+    if not parsed:
+        return False
+
+    if not is_youtube_url(url):
+        return False
+
+    path = parsed.path.strip("/")
+    if not path:
+        return False
+
+    parts = path.split("/")
+    if parts[0] in ("channel", "c", "user", "@"):
+        return len(parts) >= 2 or parts[0] == "@"
+
+    return parts[0].startswith("@")
