@@ -436,13 +436,34 @@ def _process_audio_item(url, *, cookie_path=None, mode="download", source_type=N
     transcript_payload = None
     transcript_error = None
     if transcript_enabled:
-        try:
-            engine, text, transcript_payload = _transcribe_downloaded_audio(platform, dest_path, url, video_id)
-        except Exception as exc:
-            transcript_error = f"Transkript hatasi: {str(exc)}"
-            engine = "error"
-            text = transcript_error
-            log_exception(logger, "Tekil transkript islemi basarisiz oldu", stage="transcribe.item", url=url, audio_path=dest_path)
+        if platform == "youtube":
+            # yt-dlp subtitle ile transcript al, API'ye gitme
+            try:
+                audio_dir = os.path.dirname(dest_path)
+                parent_dir = os.path.dirname(audio_dir) if os.path.basename(audio_dir).lower() == "ses" else audio_dir
+                tr_dir = os.path.join(parent_dir, "transcript")
+                os.makedirs(tr_dir, exist_ok=True)
+                txt_items = download_youtube_transcript_ytdlp(url, save_path=tr_dir, cookie_path=resolved_cookie)
+                if txt_items:
+                    txt_path = txt_items[0].get("txt_path")
+                    text = open(txt_path, encoding="utf-8").read() if txt_path and os.path.isfile(txt_path) else None
+                    engine = "ytdlp_subtitle"
+                else:
+                    engine = "ytdlp_subtitle"
+                    text = None
+            except Exception as exc:
+                transcript_error = f"Transkript hatasi: {str(exc)}"
+                engine = "error"
+                text = transcript_error
+                log_exception(logger, "yt-dlp subtitle basarisiz oldu", stage="transcribe.item", url=url)
+        else:
+            try:
+                engine, text, transcript_payload = _transcribe_downloaded_audio(platform, dest_path, url, video_id)
+            except Exception as exc:
+                transcript_error = f"Transkript hatasi: {str(exc)}"
+                engine = "error"
+                text = transcript_error
+                log_exception(logger, "Tekil transkript islemi basarisiz oldu", stage="transcribe.item", url=url, audio_path=dest_path)
 
     audio_removed = False
     if not keep_audio_files and os.path.isfile(dest_path):
