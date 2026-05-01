@@ -1253,7 +1253,7 @@ def download_youtube_transcript_ytdlp(url, save_path, cookie_path=None):
         "outtmpl": "%(title)s [%(id)s].%(ext)s",
         "ignoreerrors": True,
         "extractor_args": {
-            "youtube": {"player_client": ["android", "ios", "web"]}
+            "youtube": {"player_client": ["tv_embedded", "web"]}
         },
     }
 
