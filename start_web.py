@@ -642,6 +642,8 @@ def _single_audio_payload(url, cookie_path=None, mode="download"):
     transcribed_count = 0
 
     for index, source_item in enumerate(source_items, start=1):
+        if index > 1:
+            time.sleep(3)
         item_url = source_item.get("url")
         if not item_url:
             continue
