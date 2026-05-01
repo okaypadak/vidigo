@@ -72,7 +72,27 @@ def is_youtube_channel_url(url):
         return False
 
     parts = path.split("/")
-    if parts[0] in ("channel", "c", "user", "@"):
-        return len(parts) >= 2 or parts[0] == "@"
+    if parts[0] in ("channel", "c", "user"):
+        return len(parts) >= 2
 
     return parts[0].startswith("@")
+
+
+def extract_youtube_channel_name(url):
+    if not is_youtube_channel_url(url):
+        return None
+
+    parsed = _parse_url(url)
+    path = parsed.path.strip("/")
+    parts = [part for part in path.split("/") if part]
+    if not parts:
+        return None
+
+    head = parts[0]
+    if head.startswith("@"):
+        return head.lstrip("@") or None
+
+    if head in ("channel", "c", "user") and len(parts) >= 2:
+        return parts[1]
+
+    return None

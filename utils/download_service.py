@@ -13,8 +13,10 @@ from utils.video_downloader import (
     extract_instagram_username,
     is_instagram_url,
     resolve_cookie_file,
+    sanitize_filename,
 )
 from utils.youtube_utils import (
+    extract_youtube_channel_name,
     extract_youtube_video_id,
     is_youtube_channel_url,
     is_youtube_playlist_url,
@@ -56,6 +58,22 @@ def _platform_download_dir(platform):
     os.makedirs(path, exist_ok=True)
     log_info(logger, "Platform indirme klasoru hazir", stage="download.prepare", platform=platform, path=path)
     return path
+
+
+def _source_download_dir(platform_dir, source_type, url):
+    if source_type == "channel":
+        channel_name = extract_youtube_channel_name(url)
+        if channel_name:
+            path = os.path.join(platform_dir, sanitize_filename(channel_name))
+            os.makedirs(path, exist_ok=True)
+            return path
+    if source_type == "profile_reels":
+        username = extract_instagram_username(url)
+        if username:
+            path = os.path.join(platform_dir, sanitize_filename(username))
+            os.makedirs(path, exist_ok=True)
+            return path
+    return platform_dir
 
 
 def _single_result(platform, source_type, url, item, download_dir, downloader):
@@ -156,6 +174,7 @@ def download_media(url, cookie_path=None, audio_only=False, item_callback=None):
     log_info(logger, "URL siniflandirildi", stage="download.classify", url=url, platform=platform, source_type=source_type)
     resolved_cookie = resolve_cookie_file(platform, cookie_path=cookie_path, cookie_dir=COOKIE_ROOT)
     platform_dir = _platform_download_dir(platform)
+    target_download_dir = _source_download_dir(platform_dir, source_type, url)
     log_info(
         logger,
         "Downloader secimi yapildi",
@@ -163,27 +182,29 @@ def download_media(url, cookie_path=None, audio_only=False, item_callback=None):
         platform=platform,
         source_type=source_type,
         cookie_file=resolved_cookie or "yok",
-        download_dir=platform_dir,
+        download_dir=target_download_dir,
     )
 
     if platform == "youtube":
         if source_type in ("playlist", "channel"):
             log_info(logger, "YouTube playlist indirme basladi", stage="download.execute", url=url)
-            result = download_youtube_playlist(url, save_path=platform_dir, cookie_path=resolved_cookie)
+            result = download_youtube_playlist(url, save_path=target_download_dir, cookie_path=resolved_cookie)
             result["source_type"] = source_type
-            if source_type == "channel" and result.get("source_name") == "playlist":
-                result["source_name"] = "channel"
+            if source_type == "channel":
+                channel_name = extract_youtube_channel_name(url)
+                if channel_name:
+                    result["source_name"] = channel_name
             result["downloader"] = "yt-dlp"
         else:
             log_info(logger, "YouTube video indirme basladi", stage="download.execute", url=url)
-            item = download_youtube_video(url, save_path=platform_dir, cookie_path=resolved_cookie)
-            result = _single_result(platform, source_type, url, item, platform_dir, "yt-dlp")
+            item = download_youtube_video(url, save_path=target_download_dir, cookie_path=resolved_cookie)
+            result = _single_result(platform, source_type, url, item, target_download_dir, "yt-dlp")
     else:
         if source_type == "profile_reels":
             log_info(logger, "Instagram profil reels indirme basladi", stage="download.execute", url=url)
             result = download_instagram_profile_reels(
                 url,
-                save_path=platform_dir,
+                save_path=target_download_dir,
                 cookie_path=resolved_cookie,
                 audio_only=audio_only,
                 item_callback=item_callback,
@@ -191,8 +212,8 @@ def download_media(url, cookie_path=None, audio_only=False, item_callback=None):
             result["downloader"] = "instaloader"
         else:
             log_info(logger, "Instagram reel indirme basladi", stage="download.execute", url=url)
-            item = download_instagram_video(url, save_path=platform_dir, cookie_path=resolved_cookie)
-            result = _single_result(platform, source_type, url, item, platform_dir, "instaloader")
+            item = download_instagram_video(url, save_path=target_download_dir, cookie_path=resolved_cookie)
+            result = _single_result(platform, source_type, url, item, target_download_dir, "instaloader")
 
     result["cookie_file"] = resolved_cookie
     if audio_only and not (platform == "instagram" and source_type == "profile_reels"):
