@@ -1264,6 +1264,7 @@ def download_youtube_transcript_ytdlp(url, save_path, cookie_path=None):
         "writesubtitles": True,
         "subtitleslangs": ["tr", "en"],
         "subtitlesformat": "vtt",
+        "format": "bestaudio/best",
         "paths": {"home": abs_save_path, "subtitle": abs_save_path},
         "outtmpl": "%(title)s [%(id)s].%(ext)s",
         "ignoreerrors": True,
