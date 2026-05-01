@@ -43,7 +43,7 @@ os.makedirs(LOG_DIR, exist_ok=True)
 
 configure_logging(LOG_PATH)
 logger = logging.getLogger(__name__)
-YOUTUBE_TRANSCRIPT_DELAY_SECONDS = 5
+YOUTUBE_TRANSCRIPT_DELAY_SECONDS = 10
 YOUTUBE_TRANSCRIPT_RETRY_SECONDS = (5, 10)
 _last_youtube_transcript_request_at = 0.0
 
