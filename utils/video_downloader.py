@@ -494,6 +494,10 @@ class YtDlpMessageBridge:
         text = (message or "").strip()
         if not text:
             return
+        _NOISY_ERRORS = ("Requested format is not available", "No video formats found", "is no longer supported")
+        if any(msg in text for msg in _NOISY_ERRORS):
+            log_info(logger, "yt-dlp format atlamalari", stage=self.stage, detail=text)
+            return
         log_warning(logger, "yt-dlp hata mesaji", stage=self.stage, detail=text)
 
 
