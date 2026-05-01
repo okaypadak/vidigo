@@ -41,6 +41,7 @@ def sanitize_filename(name):
 
 
 def build_unique_filepath(directory, title, extension):
+    os.makedirs(directory, exist_ok=True)
     safe_title = sanitize_filename(title)
     candidate = os.path.join(directory, f"{safe_title}{extension}")
     if not os.path.exists(candidate):
@@ -190,6 +191,57 @@ def _iter_directory_files(directory):
         for filename in os.listdir(directory)
         if os.path.isfile(os.path.join(directory, filename))
     }
+
+
+def _uploader_download_dir(base_dir, uploader):
+    safe_uploader = sanitize_filename(uploader)
+    if not safe_uploader:
+        return os.path.abspath(base_dir)
+
+    abs_base_dir = os.path.abspath(base_dir)
+    if os.path.basename(abs_base_dir).lower() == safe_uploader.lower():
+        os.makedirs(abs_base_dir, exist_ok=True)
+        return abs_base_dir
+
+    path = os.path.join(abs_base_dir, safe_uploader)
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _move_file_to_uploader_dir(file_path, base_dir, uploader):
+    if not file_path or not uploader:
+        return file_path
+
+    abs_file_path = os.path.abspath(file_path)
+    if not os.path.isfile(abs_file_path):
+        return abs_file_path
+
+    target_dir = _uploader_download_dir(base_dir, uploader)
+    if os.path.abspath(os.path.dirname(abs_file_path)) == os.path.abspath(target_dir):
+        return abs_file_path
+
+    stem, extension = os.path.splitext(os.path.basename(abs_file_path))
+    target_path = build_unique_filepath(target_dir, stem, extension)
+    os.replace(abs_file_path, target_path)
+    log_info(
+        logger,
+        "Dosya kanal klasorune tasindi",
+        stage="download.organize",
+        uploader=uploader,
+        source_path=abs_file_path,
+        target_path=target_path,
+    )
+    return target_path
+
+
+def _move_item_file_to_uploader_dir(item, base_dir):
+    uploader = item.get("uploader")
+    file_path = item.get("file_path")
+    moved_path = _move_file_to_uploader_dir(file_path, base_dir, uploader)
+    if moved_path:
+        item["file_path"] = moved_path
+        item["file_name"] = os.path.basename(moved_path)
+    return item
 
 
 def _find_latest_video_file(directory, stem=None, ignore_paths=None):
@@ -464,7 +516,8 @@ def download_instagram_video(url, save_path="downloads", cookie_path=None):
         raise FileNotFoundError("Instaloader video dosyasini indirmedi.")
 
     item = _instagram_item_from_post(post, video_path)
-    log_info(logger, "Instagram tek video akisi tamamlandi", stage="instagram.download", shortcode=shortcode, file_path=video_path)
+    item = _move_item_file_to_uploader_dir(item, abs_save_path)
+    log_info(logger, "Instagram tek video akisi tamamlandi", stage="instagram.download", shortcode=shortcode, file_path=item["file_path"])
     return item
 
 
@@ -613,7 +666,7 @@ def download_instagram_audio(url, save_path="downloads", codec="m4a", cookie_pat
     item = download_instagram_video(url, save_path=save_path, cookie_path=cookie_path)
     video_path = item["file_path"]
     stem = os.path.splitext(os.path.basename(video_path))[0]
-    audio_path = build_unique_filepath(abs_save_path, stem, f".{codec}")
+    audio_path = build_unique_filepath(os.path.dirname(video_path), stem, f".{codec}")
     _extract_audio_to_m4a(video_path, audio_path)
 
     try:
@@ -731,6 +784,94 @@ def _build_ytdlp_video_options(abs_save_path, cookie_path=None, allow_playlist=F
     return ydl_opts, downloaded_files
 
 
+def _build_ytdlp_audio_playlist_options(abs_save_path, cookie_path=None, item_callback=None):
+    ffmpeg_dir = get_ffmpeg_dir()
+    downloaded_files = {}
+    notified_ids = set()
+    reporter = YtDlpProgressReporter("youtube.audio.download", "youtube.audio.postprocess")
+
+    def remember_path(info_dict, filepath):
+        if not info_dict or not filepath:
+            return
+        video_id = info_dict.get("id")
+        if video_id:
+            downloaded_files[video_id] = os.path.abspath(filepath)
+
+    def notify_item(info_dict, filepath):
+        if not item_callback or not info_dict or not filepath or not os.path.isfile(filepath):
+            return
+        video_id = info_dict.get("id")
+        if video_id in notified_ids:
+            return
+        item = _youtube_item_from_info(info_dict, downloaded_files, abs_save_path)
+        if item and item.get("file_path"):
+            if video_id:
+                notified_ids.add(video_id)
+            item_callback(item)
+
+    def progress_hook(data):
+        reporter.progress_hook(data)
+        if data.get("status") != "finished":
+            return
+        info_dict = data.get("info_dict") or {}
+        filepath = data.get("filename")
+        remember_path(info_dict, filepath)
+        if filepath and os.path.splitext(filepath)[1].lower() == ".m4a":
+            notify_item(info_dict, filepath)
+
+    def postprocessor_hook(data):
+        reporter.postprocessor_hook(data)
+        if data.get("status") != "finished":
+            return
+        info_dict = data.get("info_dict") or {}
+        filepath = info_dict.get("filepath") or data.get("filepath")
+        remember_path(info_dict, filepath)
+        notify_item(info_dict, downloaded_files.get(info_dict.get("id")) or filepath)
+
+    ydl_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "logger": YtDlpMessageBridge("youtube.audio.engine"),
+        "windowsfilenames": True,
+        "cookiefile": cookie_path,
+        "http_headers": {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        },
+        "ffmpeg_location": str(ffmpeg_dir) if ffmpeg_dir else "ffmpeg",
+        "retries": 5,
+        "fragment_retries": 5,
+        "ignoreerrors": True,
+        "format": "bestaudio[ext=m4a]/bestaudio/best",
+        "paths": {"home": abs_save_path},
+        "outtmpl": "%(title)s [%(id)s].%(ext)s",
+        "progress_hooks": [progress_hook],
+        "postprocessor_hooks": [postprocessor_hook],
+        "postprocessors": [
+            {
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "m4a",
+                "preferredquality": "0",
+            }
+        ],
+        "noplaylist": False,
+        "extractor_args": {
+            "youtube": {"player_client": ["android", "ios", "web"]}
+        },
+    }
+
+    log_info(
+        logger,
+        "yt-dlp ses playlist secenekleri hazirlandi",
+        stage="youtube.audio.prepare",
+        save_path=abs_save_path,
+        cookie_file=cookie_path or "yok",
+        ffmpeg_location=ydl_opts["ffmpeg_location"],
+    )
+    return ydl_opts, downloaded_files
+
+
 def _youtube_item_from_info(entry, downloaded_files, download_dir):
     if not entry:
         return None
@@ -742,12 +883,16 @@ def _youtube_item_from_info(entry, downloaded_files, download_dir):
         file_path = None
     if not file_path and entry.get("id"):
         marker = f"[{entry.get('id')}]"
-        for filename in os.listdir(download_dir):
-            if marker in filename:
-                candidate = os.path.join(download_dir, filename)
+        for root, _, filenames in os.walk(download_dir):
+            for filename in filenames:
+                if marker not in filename:
+                    continue
+                candidate = os.path.join(root, filename)
                 if os.path.isfile(candidate):
                     file_path = os.path.abspath(candidate)
                     break
+            if file_path:
+                break
 
     item = {
         "id": entry.get("id"),
@@ -763,6 +908,7 @@ def _youtube_item_from_info(entry, downloaded_files, download_dir):
         "file_path": file_path,
         "downloaded_at": datetime.now().isoformat(),
     }
+    item = _move_item_file_to_uploader_dir(item, download_dir)
     log_info(
         logger,
         "YouTube oge metadatasi olusturuldu",
@@ -834,9 +980,110 @@ def download_youtube_playlist(url, save_path="downloads", cookie_path=None):
     }
 
 
+def download_youtube_playlist_audio(url, save_path="downloads", cookie_path=None, item_callback=None):
+    abs_save_path = os.path.abspath(save_path)
+    os.makedirs(abs_save_path, exist_ok=True)
+    log_info(logger, "YouTube playlist ses akisi basladi", stage="youtube.audio.playlist", url=url, save_path=abs_save_path)
+    ydl_opts, downloaded_files = _build_ytdlp_audio_playlist_options(
+        abs_save_path,
+        cookie_path=cookie_path,
+        item_callback=item_callback,
+    )
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+
+    entries = info.get("entries") or []
+    items = []
+    seen = set()
+    for entry in entries:
+        item = _youtube_item_from_info(entry, downloaded_files, abs_save_path)
+        if not item or not item.get("video_id") or not item.get("file_path"):
+            continue
+        if item["video_id"] in seen:
+            continue
+        seen.add(item["video_id"])
+        items.append(item)
+
+    log_info(
+        logger,
+        "YouTube playlist ses akisi tamamlandi",
+        stage="youtube.audio.playlist",
+        playlist_id=info.get("id") or extract_youtube_playlist_id(url),
+        title=info.get("title") or "-",
+        item_count=len(items),
+    )
+    return {
+        "platform": "youtube",
+        "source_type": "playlist",
+        "source_name": info.get("channel") or info.get("uploader") or info.get("title") or info.get("id") or extract_youtube_playlist_id(url) or "playlist",
+        "source_url": info.get("webpage_url") or url,
+        "download_dir": abs_save_path,
+        "playlist_id": info.get("id") or extract_youtube_playlist_id(url),
+        "items": items,
+    }
+
+
+def list_youtube_video_urls(url, cookie_path=None):
+    ydl_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "logger": YtDlpMessageBridge("youtube.list.engine"),
+        "cookiefile": cookie_path,
+        "extract_flat": "in_playlist",
+        "skip_download": True,
+        "ignoreerrors": True,
+        "noplaylist": False,
+        "extractor_args": {
+            "youtube": {"player_client": ["android", "ios", "web"]}
+        },
+    }
+    log_info(logger, "YouTube kaynak video listesi aliniyor", stage="youtube.list", url=url, cookie_file=cookie_path or "yok")
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+
+    entries = info.get("entries") if isinstance(info, dict) else None
+    if not entries:
+        video_id = info.get("id") if isinstance(info, dict) else None
+        webpage_url = info.get("webpage_url") if isinstance(info, dict) else None
+        return [
+            {
+                "url": webpage_url or (f"https://www.youtube.com/watch?v={video_id}" if video_id else url),
+                "video_id": video_id,
+                "title": info.get("title") if isinstance(info, dict) else None,
+                "uploader": (info.get("uploader") or info.get("channel")) if isinstance(info, dict) else None,
+            }
+        ]
+
+    items = []
+    seen = set()
+    for entry in entries:
+        if not entry:
+            continue
+        video_id = entry.get("id")
+        item_url = entry.get("webpage_url") or entry.get("url")
+        if video_id:
+            item_url = f"https://www.youtube.com/watch?v={video_id}"
+        if not item_url or item_url in seen:
+            continue
+        seen.add(item_url)
+        items.append(
+            {
+                "url": item_url,
+                "video_id": video_id,
+                "title": entry.get("title"),
+                "uploader": entry.get("uploader") or entry.get("channel") or info.get("uploader") or info.get("channel"),
+            }
+        )
+
+    log_info(logger, "YouTube kaynak video listesi alindi", stage="youtube.list", url=url, item_count=len(items))
+    return items
+
+
 def download_audio_generic(url, save_path="downloads", codec="m4a", cookie_path=None):
     abs_save_path = os.path.abspath(save_path)
     os.makedirs(abs_save_path, exist_ok=True)
+    existing_files = _iter_directory_files(abs_save_path)
     log_info(logger, "Genel ses indirme akisi basladi", stage="audio.generic", url=url, codec=codec, save_path=abs_save_path)
 
     if "instagram.com" in url:
@@ -880,6 +1127,13 @@ def download_audio_generic(url, save_path="downloads", codec="m4a", cookie_path=
         "noplaylist": True,
         "progress_hooks": [progress_hook],
         "postprocessor_hooks": [postprocessor_hook],
+        "postprocessors": [
+            {
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": codec,
+                "preferredquality": "0",
+            }
+        ],
     }
 
     if is_youtube:
@@ -898,14 +1152,17 @@ def download_audio_generic(url, save_path="downloads", codec="m4a", cookie_path=
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
 
-    if final_file and os.path.isfile(final_file[-1]):
-        downloaded_path = final_file[-1]
+    final_candidates = [path for path in final_file if path and os.path.isfile(path)]
+    final_candidates = [path for path in final_candidates if os.path.splitext(path)[1].lower() == f".{codec.lower()}"]
+    if final_candidates:
+        downloaded_path = final_candidates[-1]
     else:
         ext = f".{codec}"
         audio_files = [
-            os.path.join(abs_save_path, filename)
-            for filename in os.listdir(abs_save_path)
-            if filename.endswith(ext)
+            os.path.join(root, filename)
+            for root, _, filenames in os.walk(abs_save_path)
+            for filename in filenames
+            if filename.lower().endswith(ext.lower()) and os.path.join(root, filename) not in existing_files
         ]
         if audio_files:
             downloaded_path = max(audio_files, key=os.path.getmtime)
@@ -914,7 +1171,9 @@ def download_audio_generic(url, save_path="downloads", codec="m4a", cookie_path=
 
     title = info.get("title") or os.path.splitext(os.path.basename(downloaded_path))[0]
     extension = os.path.splitext(downloaded_path)[1] or f".{codec}"
-    final_path = build_unique_filepath(abs_save_path, title, extension)
+    uploader = info.get("uploader") or info.get("channel")
+    target_dir = _uploader_download_dir(abs_save_path, uploader) if uploader else abs_save_path
+    final_path = build_unique_filepath(target_dir, title, extension)
 
     if os.path.abspath(downloaded_path) != os.path.abspath(final_path):
         os.replace(downloaded_path, final_path)
@@ -922,3 +1181,38 @@ def download_audio_generic(url, save_path="downloads", codec="m4a", cookie_path=
 
     log_info(logger, "Genel ses indirme akisi tamamlandi", stage="audio.generic", title=title, final_path=final_path)
     return final_path
+
+
+def _vtt_to_txt(vtt_path):
+    """VTT altyazı dosyasını düz metne çevirir, VTT dosyasını siler."""
+    with open(vtt_path, encoding="utf-8") as f:
+        raw = f.read()
+
+    lines = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("WEBVTT") or line.startswith("Kind:") or line.startswith("Language:"):
+            continue
+        if re.match(r"^\d{2}:\d{2}:\d{2}[.,]\d{3}\s*-->\s*", line):
+            continue
+        if re.match(r"^\d+$", line):
+            continue
+        lines.append(line)
+
+    # Ardışık tekrar eden satırları kaldır
+    deduped = []
+    for line in lines:
+        if not deduped or line != deduped[-1]:
+            deduped.append(line)
+
+    txt_path = re.sub(r"\.[a-z]{2,3}\.vtt$", ".txt", vtt_path)
+    if txt_path == vtt_path:
+        txt_path = os.path.splitext(vtt_path)[0] + ".txt"
+
+    with open(txt_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(deduped))
+
+    os.remove(vtt_path)
+    return txt_path
