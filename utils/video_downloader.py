@@ -416,47 +416,29 @@ class YtDlpProgressReporter:
         video_id = info_dict.get("id") or data.get("filename") or "unknown"
         title = info_dict.get("title") or video_id
 
-        if status == "downloading":
-            percent = self._extract_percent(data)
-            if percent is None:
-                return
-            bucket = min(10, max(0, int(percent // 10)))
-            if self._progress_buckets.get(video_id) == bucket:
-                return
-            self._progress_buckets[video_id] = bucket
-            log_info(
-                logger,
-                "yt-dlp indirme ilerliyor",
-                stage=self.download_stage,
-                video_id=video_id,
-                title=title,
-                progress=f"{percent:.1f}%",
-            )
-            return
-
         if status == "finished":
             log_info(
                 logger,
-                "yt-dlp ham indirme tamamlandi",
+                "indirme tamamlandi",
                 stage=self.download_stage,
                 video_id=video_id,
                 title=title,
-                temp_file=data.get("filename"),
             )
 
     def postprocessor_hook(self, data):
         if data.get("status") != "finished":
+            return
+        if data.get("postprocessor") not in ("MoveFiles", "FFmpegExtractAudio"):
             return
 
         info_dict = data.get("info_dict") or {}
         video_id = info_dict.get("id") or "unknown"
         log_info(
             logger,
-            "yt-dlp son isleme adimi tamamlandi",
+            "isleme tamamlandi",
             stage=self.postprocess_stage,
             video_id=video_id,
             title=info_dict.get("title") or video_id,
-            final_path=info_dict.get("filepath"),
             postprocessor=data.get("postprocessor"),
         )
 
@@ -479,14 +461,14 @@ class YtDlpMessageBridge:
         self.stage = stage
 
     def debug(self, message):
-        text = (message or "").strip()
-        if not text:
-            return
-        log_info(logger, "yt-dlp mesaj", stage=self.stage, detail=text)
+        pass
 
     def warning(self, message):
         text = (message or "").strip()
         if not text:
+            return
+        _NOISY_WARNINGS = ("GVS PO Token", "SABR streaming", "impersonation", "impersonate")
+        if any(w in text for w in _NOISY_WARNINGS):
             return
         log_warning(logger, "yt-dlp uyari", stage=self.stage, detail=text)
 
@@ -496,9 +478,8 @@ class YtDlpMessageBridge:
             return
         _NOISY_ERRORS = ("Requested format is not available", "No video formats found", "is no longer supported")
         if any(msg in text for msg in _NOISY_ERRORS):
-            log_info(logger, "yt-dlp format atlamalari", stage=self.stage, detail=text)
             return
-        log_warning(logger, "yt-dlp hata mesaji", stage=self.stage, detail=text)
+        log_warning(logger, "yt-dlp hata", stage=self.stage, detail=text)
 
 
 def download_instagram_video(url, save_path="downloads", cookie_path=None):
@@ -754,7 +735,7 @@ def _build_ytdlp_video_options(abs_save_path, cookie_path=None, allow_playlist=F
         "no_warnings": True,
         "logger": YtDlpMessageBridge("youtube.engine"),
         "windowsfilenames": True,
-        "cookiefile": cookie_path,
+        "cookiefile": None,
         "http_headers": {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -776,15 +757,6 @@ def _build_ytdlp_video_options(abs_save_path, cookie_path=None, allow_playlist=F
         },
     }
 
-    log_info(
-        logger,
-        "yt-dlp video secenekleri hazirlandi",
-        stage="youtube.prepare",
-        save_path=abs_save_path,
-        allow_playlist=allow_playlist,
-        cookie_file=cookie_path or "yok",
-        ffmpeg_location=ydl_opts["ffmpeg_location"],
-    )
     return ydl_opts, downloaded_files
 
 
@@ -837,7 +809,7 @@ def _build_ytdlp_audio_playlist_options(abs_save_path, cookie_path=None, item_ca
         "no_warnings": True,
         "logger": YtDlpMessageBridge("youtube.audio.engine"),
         "windowsfilenames": True,
-        "cookiefile": cookie_path,
+        "cookiefile": None,
         "http_headers": {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -865,14 +837,6 @@ def _build_ytdlp_audio_playlist_options(abs_save_path, cookie_path=None, item_ca
         },
     }
 
-    log_info(
-        logger,
-        "yt-dlp ses playlist secenekleri hazirlandi",
-        stage="youtube.audio.prepare",
-        save_path=abs_save_path,
-        cookie_file=cookie_path or "yok",
-        ffmpeg_location=ydl_opts["ffmpeg_location"],
-    )
     return ydl_opts, downloaded_files
 
 
@@ -913,14 +877,6 @@ def _youtube_item_from_info(entry, downloaded_files, download_dir):
         "downloaded_at": datetime.now().isoformat(),
     }
     item = _move_item_file_to_uploader_dir(item, download_dir)
-    log_info(
-        logger,
-        "YouTube oge metadatasi olusturuldu",
-        stage="youtube.result",
-        video_id=item["video_id"],
-        title=item["title"],
-        file_path=item["file_path"] or "bulunamadi",
-    )
     return item
 
 
@@ -1131,7 +1087,7 @@ def download_audio_generic(url, save_path="downloads", codec="m4a", cookie_path=
         "no_warnings": True,
         "logger": YtDlpMessageBridge("audio.engine"),
         "windowsfilenames": True,
-        "cookiefile": resolve_cookie_file("youtube", cookie_path=cookie_path),
+        "cookiefile": None if is_youtube else resolve_cookie_file("youtube", cookie_path=cookie_path),
         "http_headers": {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -1160,14 +1116,6 @@ def download_audio_generic(url, save_path="downloads", codec="m4a", cookie_path=
             "youtube": {"player_client": ["android", "ios", "web"]}
         }
 
-    log_info(
-        logger,
-        "Ses indirme ayarlari hazirlandi",
-        stage="audio.generic",
-        is_youtube=is_youtube,
-        cookie_file=ydl_opts["cookiefile"] or "yok",
-        ffmpeg_location=ydl_opts["ffmpeg_location"],
-    )
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
 
@@ -1261,18 +1209,17 @@ def download_youtube_transcript_ytdlp(url, save_path, cookie_path=None):
         "no_warnings": True,
         "logger": YtDlpMessageBridge("youtube.transcript"),
         "windowsfilenames": True,
-        "cookiefile": cookie_path,
+        "cookiefile": None,
         "ffmpeg_location": str(ffmpeg_dir) if ffmpeg_dir else "ffmpeg",
         "skip_download": True,
         "writeautomaticsub": True,
-        "writesubtitles": True,
         "subtitleslangs": ["tr", "en"],
         "subtitlesformat": "vtt",
         "paths": {"home": abs_save_path, "subtitle": abs_save_path},
         "outtmpl": "%(title)s [%(id)s].%(ext)s",
         "ignoreerrors": True,
         "extractor_args": {
-            "youtube": {"player_client": ["web", "mweb"]}
+            "youtube": {"player_client": ["android", "web"]}
         },
     }
 

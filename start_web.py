@@ -126,6 +126,7 @@ def _whisper(dest_path):
 def _youtube_api(video_id):
     global _last_youtube_transcript_request_at
 
+    cookie_path = resolve_cookie_file("youtube")
     attempts = len(YOUTUBE_TRANSCRIPT_RETRY_SECONDS) + 1
     for attempt in range(1, attempts + 1):
         elapsed = time.monotonic() - _last_youtube_transcript_request_at
@@ -140,15 +141,13 @@ def _youtube_api(video_id):
             )
             time.sleep(wait_seconds)
 
-        log_info(logger, "YouTube transcript API denemesi basladi", stage="transcribe.youtube_api", video_id=video_id, attempt=attempt)
+        log_info(logger, "YouTube transcript API denemesi basladi", stage="transcribe.youtube_api", video_id=video_id, attempt=attempt, cookie_file=cookie_path or "yok")
         _last_youtube_transcript_request_at = time.monotonic()
         try:
-            cookie_file = os.path.join(os.path.expanduser("~"), "cookie", "youtube.txt")
-            cookie_arg = cookie_file if os.path.isfile(cookie_file) else None
             if hasattr(YouTubeTranscriptApi, "get_transcript"):
-                transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=["tr", "en"], cookies=cookie_arg) if cookie_arg else YouTubeTranscriptApi.get_transcript(video_id, languages=["tr", "en"])
+                transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=["tr", "en"], cookies=cookie_path)
             else:
-                api = YouTubeTranscriptApi(cookies=cookie_arg) if cookie_arg else YouTubeTranscriptApi()
+                api = YouTubeTranscriptApi()
                 fetched = api.fetch(video_id, languages=("tr", "en"))
                 transcript = fetched.to_raw_data()
             log_info(
@@ -164,9 +163,10 @@ def _youtube_api(video_id):
             NoTranscriptFound,
             TranscriptsDisabled,
             VideoUnavailable,
+            CouldNotRetrieveTranscript,
         ):
             raise
-        except Exception:
+        except Exception as exc:
             if attempt >= attempts:
                 raise
             wait_seconds = YOUTUBE_TRANSCRIPT_RETRY_SECONDS[attempt - 1]
@@ -177,6 +177,7 @@ def _youtube_api(video_id):
                 video_id=video_id,
                 attempt=attempt,
                 wait_seconds=wait_seconds,
+                error=str(exc),
             )
             time.sleep(wait_seconds)
 
@@ -208,15 +209,6 @@ def _persist_transcript(
     transcript_id = video_id or str(uuid.uuid4())[:8]
     stored_file_path = dest_path if file_path is None and not audio_removed else file_path
     folder_name = uploader or _folder_name_from_path(dest_path)
-    log_info(
-        logger,
-        "Transkript kaydi hazirlaniyor",
-        stage="persist.transcript",
-        transcript_id=transcript_id,
-        video_name=video_name,
-        platform=platform,
-        engine=engine,
-    )
     payload = {
         "engine": engine,
         "platform": platform,
@@ -247,13 +239,6 @@ def _persist_transcript(
         removed_file_path=dest_path if audio_removed else None,
         uploader=folder_name,
         audio_removed=audio_removed,
-    )
-    log_info(
-        logger,
-        "Transkript ve gecmis kaydi yazildi",
-        stage="persist.transcript",
-        transcript_id=transcript_id,
-        file_name=os.path.basename(dest_path),
     )
 
 
@@ -305,13 +290,6 @@ def _persist_downloaded_item(item, *, platform, source_type, source_name, source
 
     try:
         _save_transcript_file_only(file_path, item_url, platform, "whisper", text, video_id=video_id, uploader=item.get("uploader"))
-        log_info(
-            logger,
-            "Transkript dosyasi yazildi",
-            stage="batch.item.save",
-            file_path=file_path,
-            transcript_id=video_id or "-",
-        )
     except Exception:
         log_exception(logger, "Transkript dosyasi kaydedilemedi", stage="batch.item.save", file_path=file_path)
 
@@ -329,7 +307,6 @@ def _persist_downloaded_item(item, *, platform, source_type, source_name, source
         )
         if manifest_path:
             item["manifest_path"] = manifest_path
-            log_info(logger, "Manifest guncellendi", stage="batch.item.manifest", file_path=file_path, manifest_path=manifest_path)
     except Exception:
         log_exception(logger, "Manifest guncellenemedi", stage="batch.item.manifest", file_path=file_path)
 
@@ -351,24 +328,9 @@ def _persist_downloaded_item(item, *, platform, source_type, source_name, source
             downloader=downloader,
             manifest_path=manifest_path,
         )
-        log_info(
-            logger,
-            "TinyDB kaydi yazildi",
-            stage="batch.item.db",
-            file_path=file_path,
-            video_id=video_id or "-",
-        )
     except Exception:
         log_exception(logger, "TinyDB kaydi guncellenemedi", stage="batch.item.db", file_path=file_path)
 
-    log_info(
-        logger,
-        "Tekil indirme zinciri tamamlandi",
-        stage="batch.item.done",
-        url=item_url,
-        file_path=file_path,
-        video_id=video_id or "-",
-    )
     return manifest_path
 
 
@@ -390,42 +352,37 @@ def _process_audio_item(url, *, cookie_path=None, mode="download", source_type=N
 
     hint_folder = (item_hint or {}).get("uploader") or source_name
 
-    # YouTube + transcript_only → ses indirmeden yt-dlp subtitle kullan
+    # YouTube + transcript_only → doğrudan YouTube Transcript API kullan
     if mode == "transcript_only" and platform == "youtube":
         source_name_for_dir = hint_folder or extract_youtube_channel_name(url) or None
+        video_id_for_transcript = extract_youtube_video_id(url)
+        if not video_id_for_transcript:
+            raise FileNotFoundError("YouTube video ID bulunamadı.")
+        text, transcript_payload = _youtube_api(video_id_for_transcript)
         transcript_dir = _ytdlp_transcript_dir(source_name_for_dir)
-        txt_items = download_youtube_transcript_ytdlp(url, save_path=transcript_dir, cookie_path=resolved_cookie)
-        if not txt_items:
-            raise FileNotFoundError("YouTube altyazısı bulunamadı. Video için altyazı mevcut olmayabilir.")
+        txt_path = os.path.join(transcript_dir, f"{sanitize_filename(video_id_for_transcript)}.txt")
+        with open(txt_path, "w", encoding="utf-8") as f:
+            f.write(text)
+        item_data = {
+            "id": video_id_for_transcript, "video_id": video_id_for_transcript, "shortcode": None,
+            "title": video_id_for_transcript, "platform": "youtube",
+            "uploader": source_name_for_dir, "source_url": url, "webpage_url": url,
+            "file_name": os.path.basename(txt_path), "file_path": txt_path,
+            "downloaded_at": datetime.now().isoformat(),
+            "engine": "youtube_api", "transcript": text,
+        }
         manifest_path = None
-        result_items = []
-        for txt_item in txt_items:
-            txt_path = txt_item.get("txt_path")
-            if not txt_path or not os.path.isfile(txt_path):
-                continue
-            video_name = os.path.splitext(os.path.basename(txt_path))[0]
-            text = open(txt_path, encoding="utf-8").read()
-            item_data = {
-                "id": None, "video_id": None, "shortcode": None,
-                "title": video_name, "platform": "youtube",
-                "uploader": source_name_for_dir, "source_url": url, "webpage_url": url,
-                "file_name": os.path.basename(txt_path), "file_path": txt_path,
-                "downloaded_at": datetime.now().isoformat(),
-                "engine": "ytdlp_subtitle", "transcript": text,
-            }
-            try:
-                mp, _ = upsert_manifest_item("youtube", source_name_for_dir or video_name, item_source_type, item_source_url, item_data, downloader="yt-dlp", download_dir=transcript_dir, engine="ytdlp_subtitle")
-                item_data["manifest_path"] = mp
-                manifest_path = mp or manifest_path
-            except Exception:
-                log_exception(logger, "Transcript manifest yazilamadi", stage="transcript.manifest", txt_path=txt_path)
-            try:
-                upsert_download_record(video_name=video_name, transcript=text, platform="youtube", source_type=item_source_type, source_name=source_name_for_dir or video_name, source_url=item_source_url, engine="ytdlp_subtitle", url=url, file_name=os.path.basename(txt_path), file_path=txt_path, uploader=source_name_for_dir, downloader="yt-dlp", manifest_path=manifest_path)
-            except Exception:
-                log_exception(logger, "Transcript DB kaydi yazilamadi", stage="transcript.db", txt_path=txt_path)
-            result_items.append(item_data)
-        first = result_items[0] if result_items else {"title": "transcript", "platform": "youtube", "engine": "ytdlp_subtitle"}
-        return first, manifest_path, resolved_cookie
+        try:
+            mp, _ = upsert_manifest_item("youtube", source_name_for_dir or video_id_for_transcript, item_source_type, item_source_url, item_data, downloader="youtube_api", download_dir=transcript_dir, engine="youtube_api")
+            item_data["manifest_path"] = mp
+            manifest_path = mp
+        except Exception:
+            log_exception(logger, "Transcript manifest yazilamadi", stage="transcript.manifest", txt_path=txt_path)
+        try:
+            upsert_download_record(video_name=video_id_for_transcript, transcript=text, platform="youtube", source_type=item_source_type, source_name=source_name_for_dir or video_id_for_transcript, source_url=item_source_url, engine="youtube_api", url=url, file_name=os.path.basename(txt_path), file_path=txt_path, uploader=source_name_for_dir, downloader="youtube_api", manifest_path=manifest_path)
+        except Exception:
+            log_exception(logger, "Transcript DB kaydi yazilamadi", stage="transcript.db", txt_path=txt_path)
+        return item_data, manifest_path, resolved_cookie
 
     dest_path = _download_mp3(url, cookie_path=resolved_cookie, folder_name=hint_folder)
     video_id = extract_youtube_video_id(url) if platform == "youtube" else extract_instagram_shortcode(url)
@@ -439,29 +396,14 @@ def _process_audio_item(url, *, cookie_path=None, mode="download", source_type=N
     transcript_error = None
     if transcript_enabled:
         if platform == "youtube":
-            # 1. yt-dlp subtitle dene
-            try:
-                audio_dir = os.path.dirname(dest_path)
-                parent_dir = os.path.dirname(audio_dir) if os.path.basename(audio_dir).lower() == "ses" else audio_dir
-                tr_dir = os.path.join(parent_dir, "transcript")
-                os.makedirs(tr_dir, exist_ok=True)
-                txt_items = download_youtube_transcript_ytdlp(url, save_path=tr_dir, cookie_path=resolved_cookie)
-                if txt_items:
-                    txt_path = txt_items[0].get("txt_path")
-                    text = open(txt_path, encoding="utf-8").read() if txt_path and os.path.isfile(txt_path) else None
-                    engine = "ytdlp_subtitle"
-                    log_info(logger, "yt-dlp subtitle ile transcript alindi", stage="transcribe.item", url=url)
-            except Exception:
-                log_exception(logger, "yt-dlp subtitle basarisiz", stage="transcribe.item", url=url)
-            # 2. yt-dlp bulamazsa YouTube API dene
-            if not text and video_id:
+            if video_id:
                 try:
-                    _, text, transcript_payload = _youtube_api(video_id)
+                    text, transcript_payload = _youtube_api(video_id)
                     engine = "youtube_api"
                     log_info(logger, "YouTube API ile transcript alindi", stage="transcribe.item", video_id=video_id)
-                except Exception:
+                except Exception as exc:
                     engine = "error"
-                    log_warning(logger, "Transcript alinamadi, atlaniyor", stage="transcribe.item", url=url)
+                    log_warning(logger, "Transcript alinamadi, atlaniyor", stage="transcribe.item", url=url, error=str(exc), error_type=type(exc).__name__)
         else:
             try:
                 engine, text, transcript_payload = _transcribe_downloaded_audio(platform, dest_path, url, video_id)
