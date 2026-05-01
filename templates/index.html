@@ -441,8 +441,9 @@
           <div class="badge">Instagram hesap</div>
         </div>
         <div class="actions">
-          <button class="btn btn-primary" type="button" onclick="downloadSingle()">Indir</button>
-          <button class="btn btn-ghost" type="button" onclick="copyResult()">Ciktiyi Kopyala</button>
+          <button class="btn btn-secondary" type="button" onclick="downloadSingle('transcript_only')">Sadece Transkript</button>
+          <button class="btn btn-ghost" type="button" onclick="downloadSingle('mp3_only')">Sadece MP3</button>
+          <button class="btn btn-primary" type="button" onclick="downloadSingle('download')">Indir</button>
         </div>
         <div class="hint">
           Cookie gerekiyorsa <code>~/cookie/youtube.txt</code> ve <code>~/cookie/instagram.txt</code> dosyalarini kullanir.
@@ -570,7 +571,7 @@
       liveLogCloseTimer = setTimeout(() => closeLiveLog(finalLabel), 1200);
     }
 
-    async function downloadSingle() {
+    async function downloadSingle(mode = "download") {
       const url = document.getElementById("videoUrl").value.trim();
       if (!url) {
         showToast("URL gerekli", "err");
@@ -580,7 +581,8 @@
       setResult("");
       const operationId = createOperationId();
       startLiveLog(operationId);
-      showToast("Indirme basladi");
+      const modeLabel = mode === "transcript_only" ? "Transkript" : mode === "mp3_only" ? "MP3" : "Indir";
+      showToast(`${modeLabel} islemi basladi`);
       try {
         const res = await fetch("/download_media", {
           method: "POST",
@@ -588,7 +590,7 @@
             "Content-Type": "application/json",
             "X-Operation-Id": operationId
           },
-          body: JSON.stringify({ url })
+          body: JSON.stringify({ url, mode })
         });
         const data = await res.json();
         if (!res.ok || data.error) {
