@@ -45,9 +45,9 @@ def transcribe_whisper(audio_path, lang="tr", model_path="medium"):
             log_info(logger, "Whisper modeli yukleniyor", stage="whisper.model", model_path=model_path, language=lang)
             model = whisper.load_model(model_path)
             log_info(logger, "Whisper modeli yuklendi", stage="whisper.model", model_path=model_path)
-        except Exception:
+        except Exception as exc:
             log_exception(logger, "Whisper modeli yuklenemedi", stage="whisper.model", model_path=model_path)
-            return "Model yuklenemedi"
+            raise RuntimeError(f"Whisper modeli yuklenemedi: {exc}") from exc
 
         try:
             use_cuda = torch.cuda.is_available()
@@ -83,4 +83,4 @@ def transcribe_whisper(audio_path, lang="tr", model_path="medium"):
             return " ".join(lines).strip()
         except Exception as exc:
             log_exception(logger, "Whisper transkripsiyonu hata verdi", stage="whisper.transcribe", audio_path=audio_path)
-            return f"Transkripsiyon hatasi: {str(exc)}"
+            raise RuntimeError(f"Whisper transkripsiyonu hata verdi: {exc}") from exc

@@ -8,6 +8,7 @@ from utils.video_downloader import (
     download_instagram_profile_reels,
     download_instagram_video,
     download_youtube_playlist,
+    download_youtube_playlist_audio,
     download_youtube_video,
     extract_instagram_shortcode,
     extract_instagram_username,
@@ -78,12 +79,13 @@ def _source_download_dir(platform_dir, source_type, url):
 
 def _single_result(platform, source_type, url, item, download_dir, downloader):
     source_name = item.get("title") or item.get("video_id") or item.get("shortcode") or "download"
+    item_dir = os.path.dirname(item.get("file_path") or "") or download_dir
     return {
         "platform": platform,
         "source_type": source_type,
         "source_name": source_name,
         "source_url": url,
-        "download_dir": download_dir,
+        "download_dir": item_dir,
         "downloader": downloader,
         "items": [item],
     }
@@ -187,14 +189,23 @@ def download_media(url, cookie_path=None, audio_only=False, item_callback=None):
 
     if platform == "youtube":
         if source_type in ("playlist", "channel"):
-            log_info(logger, "YouTube playlist indirme basladi", stage="download.execute", url=url)
-            result = download_youtube_playlist(url, save_path=target_download_dir, cookie_path=resolved_cookie)
+            if audio_only:
+                log_info(logger, "YouTube playlist ses indirme basladi", stage="download.execute", url=url)
+                result = download_youtube_playlist_audio(
+                    url,
+                    save_path=target_download_dir,
+                    cookie_path=resolved_cookie,
+                    item_callback=item_callback,
+                )
+            else:
+                log_info(logger, "YouTube playlist indirme basladi", stage="download.execute", url=url)
+                result = download_youtube_playlist(url, save_path=target_download_dir, cookie_path=resolved_cookie)
             result["source_type"] = source_type
             if source_type == "channel":
                 channel_name = extract_youtube_channel_name(url)
                 if channel_name:
                     result["source_name"] = channel_name
-            result["downloader"] = "yt-dlp"
+            result["downloader"] = "yt-dlp+ffmpeg" if audio_only else "yt-dlp"
         else:
             log_info(logger, "YouTube video indirme basladi", stage="download.execute", url=url)
             item = download_youtube_video(url, save_path=target_download_dir, cookie_path=resolved_cookie)
@@ -216,7 +227,7 @@ def download_media(url, cookie_path=None, audio_only=False, item_callback=None):
             result = _single_result(platform, source_type, url, item, target_download_dir, "instaloader")
 
     result["cookie_file"] = resolved_cookie
-    if audio_only and not (platform == "instagram" and source_type == "profile_reels"):
+    if audio_only and not (platform == "instagram" and source_type == "profile_reels") and not (platform == "youtube" and source_type in ("playlist", "channel")):
         log_info(
             logger,
             "Indirilen ogeler ses formatina donusturuluyor",

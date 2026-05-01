@@ -1193,11 +1193,15 @@ def _vtt_to_txt(vtt_path):
         line = line.strip()
         if not line:
             continue
-        if line.startswith("WEBVTT") or line.startswith("Kind:") or line.startswith("Language:"):
+        if line.startswith("WEBVTT") or line.startswith("Kind:") or line.startswith("Language:") or line.startswith("X-TIMESTAMP-MAP"):
             continue
-        if re.match(r"^\d{2}:\d{2}:\d{2}[.,]\d{3}\s*-->\s*", line):
+        if re.match(r"^\d+:\d{2}:\d{2}[.,]\d{3}\s*-->\s*", line):
             continue
         if re.match(r"^\d+$", line):
+            continue
+        # Inline cue timestamps ve HTML tag'lerini temizle
+        line = re.sub(r"<[^>]+>", "", line).strip()
+        if not line:
             continue
         lines.append(line)
 
@@ -1216,3 +1220,57 @@ def _vtt_to_txt(vtt_path):
 
     os.remove(vtt_path)
     return txt_path
+
+
+def _find_vtt_files(directory):
+    result = []
+    for root, _, filenames in os.walk(directory):
+        for fname in filenames:
+            if fname.endswith(".vtt"):
+                result.append(os.path.join(root, fname))
+    return result
+
+
+def download_youtube_transcript_ytdlp(url, save_path, cookie_path=None):
+    """yt-dlp ile YouTube altyazısını indirir, VTT→TXT çevirir. Ses indirmez."""
+    abs_save_path = os.path.abspath(save_path)
+    os.makedirs(abs_save_path, exist_ok=True)
+    ffmpeg_dir = get_ffmpeg_dir()
+
+    ydl_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "logger": YtDlpMessageBridge("youtube.transcript"),
+        "windowsfilenames": True,
+        "cookiefile": cookie_path,
+        "ffmpeg_location": str(ffmpeg_dir) if ffmpeg_dir else "ffmpeg",
+        "skip_download": True,
+        "writeautomaticsub": True,
+        "writesubtitles": True,
+        "subtitleslangs": ["tr", "en"],
+        "subtitlesformat": "vtt",
+        "paths": {"home": abs_save_path, "subtitle": abs_save_path},
+        "outtmpl": "%(title)s [%(id)s].%(ext)s",
+        "ignoreerrors": True,
+        "extractor_args": {
+            "youtube": {"player_client": ["android", "ios", "web"]}
+        },
+    }
+
+    log_info(logger, "yt-dlp altyazi indirme basladi", stage="youtube.transcript", url=url, save_path=abs_save_path)
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        ydl.extract_info(url, download=True)
+
+    vtt_files = _find_vtt_files(abs_save_path)
+    items = []
+    for vtt_path in vtt_files:
+        try:
+            txt_path = _vtt_to_txt(vtt_path)
+            items.append({"txt_path": txt_path})
+            log_info(logger, "VTT metin dosyasina donusturuldu", stage="youtube.transcript", txt_path=txt_path)
+        except Exception:
+            log_exception(logger, "VTT donusturme basarisiz", stage="youtube.transcript", vtt_path=vtt_path)
+
+    log_info(logger, "yt-dlp altyazi indirme tamamlandi", stage="youtube.transcript", url=url, item_count=len(items))
+    return items
