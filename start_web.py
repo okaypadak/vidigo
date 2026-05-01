@@ -659,15 +659,19 @@ def _single_audio_payload(url, cookie_path=None, mode="download"):
             total=len(source_items),
             url=item_url,
         )
-        item, item_manifest_path, item_cookie_file = _process_audio_item(
-            item_url,
-            cookie_path=cookie_path,
-            mode=mode,
-            source_type=request["source_type"],
-            source_name=source_name,
-            source_url=url,
-            item_hint=source_item,
-        )
+        try:
+            item, item_manifest_path, item_cookie_file = _process_audio_item(
+                item_url,
+                cookie_path=cookie_path,
+                mode=mode,
+                source_type=request["source_type"],
+                source_name=source_name,
+                source_url=url,
+                item_hint=source_item,
+            )
+        except Exception as exc:
+            log_warning(logger, "Video atlandi", stage="single.pipeline", index=index, url=item_url, reason=str(exc))
+            continue
         items.append(item)
         manifest_path = item_manifest_path or manifest_path
         cookie_file = item_cookie_file or cookie_file
