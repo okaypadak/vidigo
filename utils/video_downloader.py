@@ -1045,6 +1045,9 @@ def list_youtube_video_urls(url, cookie_path=None):
     entries = info.get("entries") if isinstance(info, dict) else None
     if not entries:
         video_id = info.get("id") if isinstance(info, dict) else None
+        # Kanal ID'si ise (UC ile başlar veya 11 karakter değil) tek video olarak döndürme
+        if video_id and (video_id.startswith("UC") or len(video_id) != 11):
+            return []
         webpage_url = info.get("webpage_url") if isinstance(info, dict) else None
         return [
             {
@@ -1061,6 +1064,9 @@ def list_youtube_video_urls(url, cookie_path=None):
         if not entry:
             continue
         video_id = entry.get("id")
+        # Kanal ID'lerini atla (UC ile başlar, 24 karakter)
+        if video_id and (video_id.startswith("UC") or len(video_id) != 11):
+            continue
         item_url = entry.get("webpage_url") or entry.get("url")
         if video_id:
             item_url = f"https://www.youtube.com/watch?v={video_id}"
