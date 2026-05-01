@@ -602,6 +602,28 @@ def _attach_item_transcripts(result):
     return result
 
 
+def _already_downloaded(video_id, mode):
+    """video_id için gerekli dosyalar zaten indirildiyse True döner."""
+    from tinydb import Query
+    from utils.file_utils import download_db, _DB_LOCK
+    with _DB_LOCK:
+        Q = Query()
+        results = download_db.search(Q.video_id == video_id)
+    if not results:
+        return False
+    record = results[0]
+    needs_audio = mode in {"download", "mp3_only"}
+    needs_transcript = mode in {"download", "transcript_only"}
+    if needs_audio:
+        file_path = record.get("file_path")
+        if not file_path or not os.path.isfile(file_path):
+            return False
+    if needs_transcript:
+        if not record.get("transcript"):
+            return False
+    return True
+
+
 def _single_audio_payload(url, cookie_path=None, mode="download"):
     transcript_enabled = mode in {"download", "transcript_only"}
     request, source_items = _expand_source_items(url, cookie_path=cookie_path)
@@ -622,6 +644,13 @@ def _single_audio_payload(url, cookie_path=None, mode="download"):
         item_url = source_item.get("url")
         if not item_url:
             continue
+
+        # Zaten indirilmişse atla
+        video_id = source_item.get("video_id")
+        if video_id and _already_downloaded(video_id, mode):
+            log_info(logger, "Video zaten indirilmis, atlaniyor", stage="single.pipeline", index=index, total=len(source_items), video_id=video_id)
+            continue
+
         log_info(
             logger,
             "Ortak tekil akista oge isleniyor",
