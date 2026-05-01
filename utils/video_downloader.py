@@ -1024,65 +1024,74 @@ def download_youtube_playlist_audio(url, save_path="downloads", cookie_path=None
     }
 
 
+def _is_valid_video_id(video_id):
+    return bool(video_id) and len(video_id) == 11 and not video_id.startswith("UC")
+
+
+def _flatten_entries(entries, uploader_fallback=None):
+    """entries içindeki iç içe playlist yapısını düzleştirir, gerçek video ID'lerini döndürür."""
+    items = []
+    seen = set()
+    for entry in (entries or []):
+        if not entry:
+            continue
+        # İç içe playlist (tab, kanal vb.) ise entries'ini de tara
+        sub_entries = entry.get("entries")
+        if sub_entries:
+            items.extend(_flatten_entries(sub_entries, uploader_fallback=uploader_fallback))
+            continue
+        video_id = entry.get("id")
+        if not _is_valid_video_id(video_id):
+            continue
+        item_url = f"https://www.youtube.com/watch?v={video_id}"
+        if item_url in seen:
+            continue
+        seen.add(item_url)
+        items.append({
+            "url": item_url,
+            "video_id": video_id,
+            "title": entry.get("title"),
+            "uploader": entry.get("uploader") or entry.get("channel") or uploader_fallback,
+        })
+    return items
+
+
 def list_youtube_video_urls(url, cookie_path=None):
+    # Kanal URL'si ise /videos tab'ını hedefle
+    channel_url = url
+    if "/@" in url and not url.rstrip("/").endswith("/videos"):
+        channel_url = url.rstrip("/") + "/videos"
+
     ydl_opts = {
         "quiet": True,
         "no_warnings": True,
         "logger": YtDlpMessageBridge("youtube.list.engine"),
         "cookiefile": cookie_path,
-        "extract_flat": "in_playlist",
+        "extract_flat": True,
         "skip_download": True,
         "ignoreerrors": True,
         "noplaylist": False,
         "extractor_args": {
-            "youtube": {"player_client": ["android", "ios", "web"]}
+            "youtube": {"player_client": ["tv_embedded", "web"]}
         },
     }
-    log_info(logger, "YouTube kaynak video listesi aliniyor", stage="youtube.list", url=url, cookie_file=cookie_path or "yok")
+    log_info(logger, "YouTube kaynak video listesi aliniyor", stage="youtube.list", url=channel_url, cookie_file=cookie_path or "yok")
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=False)
+        info = ydl.extract_info(channel_url, download=False)
 
-    entries = info.get("entries") if isinstance(info, dict) else None
-    if not entries:
-        video_id = info.get("id") if isinstance(info, dict) else None
-        # Kanal ID'si ise (UC ile başlar veya 11 karakter değil) tek video olarak döndürme
-        if video_id and (video_id.startswith("UC") or len(video_id) != 11):
-            return []
-        webpage_url = info.get("webpage_url") if isinstance(info, dict) else None
-        return [
-            {
-                "url": webpage_url or (f"https://www.youtube.com/watch?v={video_id}" if video_id else url),
-                "video_id": video_id,
-                "title": info.get("title") if isinstance(info, dict) else None,
-                "uploader": (info.get("uploader") or info.get("channel")) if isinstance(info, dict) else None,
-            }
-        ]
+    if not isinstance(info, dict):
+        return []
 
-    items = []
-    seen = set()
-    for entry in entries:
-        if not entry:
-            continue
-        video_id = entry.get("id")
-        # Kanal ID'lerini atla (UC ile başlar, 24 karakter)
-        if video_id and (video_id.startswith("UC") or len(video_id) != 11):
-            continue
-        item_url = entry.get("webpage_url") or entry.get("url")
-        if video_id:
-            item_url = f"https://www.youtube.com/watch?v={video_id}"
-        if not item_url or item_url in seen:
-            continue
-        seen.add(item_url)
-        items.append(
-            {
-                "url": item_url,
-                "video_id": video_id,
-                "title": entry.get("title"),
-                "uploader": entry.get("uploader") or entry.get("channel") or info.get("uploader") or info.get("channel"),
-            }
-        )
+    uploader = info.get("uploader") or info.get("channel")
 
-    log_info(logger, "YouTube kaynak video listesi alindi", stage="youtube.list", url=url, item_count=len(items))
+    # Tek video
+    if _is_valid_video_id(info.get("id")):
+        webpage_url = info.get("webpage_url") or f"https://www.youtube.com/watch?v={info['id']}"
+        return [{"url": webpage_url, "video_id": info["id"], "title": info.get("title"), "uploader": uploader}]
+
+    entries = info.get("entries") or []
+    items = _flatten_entries(entries, uploader_fallback=uploader)
+    log_info(logger, "YouTube kaynak video listesi alindi", stage="youtube.list", url=channel_url, item_count=len(items))
     return items
 
 
