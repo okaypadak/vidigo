@@ -1147,6 +1147,8 @@ def fetch_channel_catalog(url, cookie_path=None):
         "channel": uploader,
         "url": url,
         "fetched_at": datetime.now().isoformat(),
+        "video_count": len(videos),
+        "short_count": len(shorts),
         "videos": videos,
         "shorts": shorts,
     }
