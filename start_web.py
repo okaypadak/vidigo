@@ -19,7 +19,7 @@ from utils.app_logging import (
 )
 from utils.download_service import COOKIE_ROOT, classify_download_url
 from utils.file_utils import load_download_history, save_download_record, save_transcript_to_file, upsert_download_record, upsert_manifest_item
-from utils.video_downloader import build_unique_filepath, download_audio_generic, download_instagram_profile_reels, download_youtube_transcript_ytdlp, extract_instagram_shortcode, extract_instagram_username, list_youtube_video_urls, resolve_cookie_file, sanitize_filename
+from utils.video_downloader import build_unique_filepath, download_audio_generic, download_instagram_profile_reels, download_youtube_transcript_ytdlp, extract_instagram_shortcode, extract_instagram_username, list_youtube_video_urls, resolve_cookie_file, sanitize_filename, save_channel_catalog
 from utils.youtube_utils import extract_youtube_channel_name, extract_youtube_video_id
 
 app = Flask(__name__)
@@ -571,6 +571,14 @@ def _single_audio_payload(url, cookie_path=None, mode="download"):
     engine = None
     source_name = extract_youtube_channel_name(url) if request["source_type"] == "channel" else None
     download_dir = None
+
+    if request["platform"] == "youtube" and request["source_type"] == "channel" and source_name:
+        try:
+            channel_dir = os.path.join(DOWNLOAD_DIR, "youtube", sanitize_filename(source_name))
+            resolved_cookie = resolve_cookie_file("youtube", cookie_path=cookie_path, cookie_dir=COOKIE_ROOT)
+            save_channel_catalog(url, channel_dir, cookie_path=resolved_cookie)
+        except Exception:
+            pass
     transcribed_count = 0
 
     for index, source_item in enumerate(source_items, start=1):

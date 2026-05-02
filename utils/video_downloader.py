@@ -1,4 +1,5 @@
 import http.cookiejar
+import json
 import logging
 import os
 import re
@@ -1100,6 +1101,66 @@ def list_youtube_video_urls(url, cookie_path=None):
 
     log_info(logger, "YouTube kaynak video listesi alindi", stage="youtube.list", url=url, item_count=len(all_items))
     return all_items
+
+
+def fetch_channel_catalog(url, cookie_path=None):
+    """Kanal URL'si için videos ve shorts listelerini ayrı ayrı döner."""
+    ydl_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "logger": YtDlpMessageBridge("youtube.catalog.engine"),
+        "cookiefile": cookie_path,
+        "extract_flat": True,
+        "skip_download": True,
+        "ignoreerrors": True,
+        "noplaylist": False,
+        "extractor_args": {
+            "youtube": {"player_client": ["tv_embedded", "web"]}
+        },
+    }
+
+    base_url = _channel_base_url(url)
+    uploader = None
+
+    def fetch_tab(tab_url):
+        nonlocal uploader
+        info = _fetch_youtube_tab(tab_url, ydl_opts)
+        if not info:
+            return []
+        if not uploader:
+            uploader = info.get("uploader") or info.get("channel")
+        entries = info.get("entries") or []
+        return _flatten_entries(entries, uploader_fallback=uploader)
+
+    videos = fetch_tab(base_url + "/videos")
+    shorts = fetch_tab(base_url + "/shorts")
+
+    log_info(
+        logger,
+        "YouTube kanal katalogu alindi",
+        stage="youtube.catalog",
+        url=url,
+        video_count=len(videos),
+        short_count=len(shorts),
+    )
+    return {
+        "channel": uploader,
+        "url": url,
+        "fetched_at": datetime.now().isoformat(),
+        "videos": videos,
+        "shorts": shorts,
+    }
+
+
+def save_channel_catalog(url, save_dir, cookie_path=None):
+    """Kanal kataloğunu save_dir/catalog.json olarak kaydeder."""
+    catalog = fetch_channel_catalog(url, cookie_path=cookie_path)
+    os.makedirs(save_dir, exist_ok=True)
+    catalog_path = os.path.join(save_dir, "catalog.json")
+    with open(catalog_path, "w", encoding="utf-8") as f:
+        json.dump(catalog, f, ensure_ascii=False, indent=2)
+    log_info(logger, "Kanal katalogu kaydedildi", stage="youtube.catalog", path=catalog_path)
+    return catalog_path
 
 
 def download_audio_generic(url, save_path="downloads", codec="m4a", cookie_path=None):
