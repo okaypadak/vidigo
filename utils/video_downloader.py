@@ -735,7 +735,7 @@ def _build_ytdlp_video_options(abs_save_path, cookie_path=None, allow_playlist=F
         "no_warnings": True,
         "logger": YtDlpMessageBridge("youtube.engine"),
         "windowsfilenames": True,
-        "cookiefile": None,
+        "cookiefile": cookie_path,
         "http_headers": {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -809,7 +809,7 @@ def _build_ytdlp_audio_playlist_options(abs_save_path, cookie_path=None, item_ca
         "no_warnings": True,
         "logger": YtDlpMessageBridge("youtube.audio.engine"),
         "windowsfilenames": True,
-        "cookiefile": None,
+        "cookiefile": cookie_path,
         "http_headers": {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -1016,12 +1016,27 @@ def _flatten_entries(entries, uploader_fallback=None):
     return items
 
 
-def list_youtube_video_urls(url, cookie_path=None):
-    # Kanal URL'si ise /videos tab'ını hedefle
-    channel_url = url
-    if "/@" in url and not url.rstrip("/").endswith("/videos"):
-        channel_url = url.rstrip("/") + "/videos"
+def _channel_base_url(url):
+    """Kanal URL'sinden tab kısmını temizler, temel URL'yi döner."""
+    stripped = url.rstrip("/")
+    for tab in ("/videos", "/shorts", "/streams", "/live", "/playlists", "/community"):
+        if stripped.endswith(tab):
+            return stripped[: -len(tab)]
+    return stripped
 
+
+def _fetch_youtube_tab(tab_url, ydl_opts):
+    log_info(logger, "YouTube tab listesi aliniyor", stage="youtube.list", url=tab_url)
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(tab_url, download=False)
+        return info if isinstance(info, dict) else None
+    except Exception:
+        log_exception(logger, "YouTube tab listesi alinamadi", stage="youtube.list", url=tab_url)
+        return None
+
+
+def list_youtube_video_urls(url, cookie_path=None):
     ydl_opts = {
         "quiet": True,
         "no_warnings": True,
@@ -1035,24 +1050,50 @@ def list_youtube_video_urls(url, cookie_path=None):
             "youtube": {"player_client": ["tv_embedded", "web"]}
         },
     }
-    log_info(logger, "YouTube kaynak video listesi aliniyor", stage="youtube.list", url=channel_url, cookie_file=cookie_path or "yok")
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(channel_url, download=False)
 
-    if not isinstance(info, dict):
+    # Tek video URL'si mi?
+    parsed = _parse_url(url)
+    if parsed and "youtube.com/watch" in url or "youtu.be/" in url:
+        info = _fetch_youtube_tab(url, ydl_opts)
+        if info and _is_valid_video_id(info.get("id")):
+            uploader = info.get("uploader") or info.get("channel")
+            webpage_url = info.get("webpage_url") or f"https://www.youtube.com/watch?v={info['id']}"
+            return [{"url": webpage_url, "video_id": info["id"], "title": info.get("title"), "uploader": uploader}]
         return []
 
-    uploader = info.get("uploader") or info.get("channel")
+    base_url = _channel_base_url(url)
+    tabs_to_fetch = [base_url + "/videos", base_url + "/shorts"]
 
-    # Tek video
-    if _is_valid_video_id(info.get("id")):
-        webpage_url = info.get("webpage_url") or f"https://www.youtube.com/watch?v={info['id']}"
-        return [{"url": webpage_url, "video_id": info["id"], "title": info.get("title"), "uploader": uploader}]
+    seen = set()
+    all_items = []
+    uploader = None
 
-    entries = info.get("entries") or []
-    items = _flatten_entries(entries, uploader_fallback=uploader)
-    log_info(logger, "YouTube kaynak video listesi alindi", stage="youtube.list", url=channel_url, item_count=len(items))
-    return items
+    for tab_url in tabs_to_fetch:
+        info = _fetch_youtube_tab(tab_url, ydl_opts)
+        if not info:
+            continue
+
+        if not uploader:
+            uploader = info.get("uploader") or info.get("channel")
+
+        if _is_valid_video_id(info.get("id")):
+            video_id = info["id"]
+            if video_id not in seen:
+                seen.add(video_id)
+                webpage_url = info.get("webpage_url") or f"https://www.youtube.com/watch?v={video_id}"
+                all_items.append({"url": webpage_url, "video_id": video_id, "title": info.get("title"), "uploader": uploader})
+            continue
+
+        entries = info.get("entries") or []
+        for item in _flatten_entries(entries, uploader_fallback=uploader):
+            if item["video_id"] not in seen:
+                seen.add(item["video_id"])
+                all_items.append(item)
+
+        log_info(logger, "YouTube tab islendi", stage="youtube.list", url=tab_url, new_items=len(all_items))
+
+    log_info(logger, "YouTube kaynak video listesi alindi", stage="youtube.list", url=url, item_count=len(all_items))
+    return all_items
 
 
 def download_audio_generic(url, save_path="downloads", codec="m4a", cookie_path=None):
@@ -1087,7 +1128,7 @@ def download_audio_generic(url, save_path="downloads", codec="m4a", cookie_path=
         "no_warnings": True,
         "logger": YtDlpMessageBridge("audio.engine"),
         "windowsfilenames": True,
-        "cookiefile": None if is_youtube else resolve_cookie_file("youtube", cookie_path=cookie_path),
+        "cookiefile": resolve_cookie_file("youtube", cookie_path=cookie_path) if is_youtube else resolve_cookie_file("youtube", cookie_path=cookie_path),
         "http_headers": {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -1189,51 +1230,195 @@ def _vtt_to_txt(vtt_path):
     return txt_path
 
 
-def _find_vtt_files(directory):
+def _find_vtt_files(directory, existing_files=None):
+    existing_files = {os.path.abspath(path) for path in (existing_files or set())}
     result = []
     for root, _, filenames in os.walk(directory):
-        for fname in filenames:
-            if fname.endswith(".vtt"):
-                result.append(os.path.join(root, fname))
+        for filename in filenames:
+            if not filename.lower().endswith(".vtt"):
+                continue
+            path = os.path.abspath(os.path.join(root, filename))
+            if path not in existing_files:
+                result.append(path)
     return result
 
 
+def _youtube_transcript_item_from_info(entry, txt_path, source_url):
+    video_id = entry.get("id") if isinstance(entry, dict) else None
+    with open(txt_path, encoding="utf-8") as f:
+        text = f.read()
+    return {
+        "id": video_id,
+        "video_id": video_id,
+        "title": entry.get("title") or video_id if isinstance(entry, dict) else os.path.splitext(os.path.basename(txt_path))[0],
+        "platform": "youtube",
+        "uploader": entry.get("uploader") or entry.get("channel") if isinstance(entry, dict) else None,
+        "source_url": entry.get("webpage_url") or entry.get("original_url") or source_url if isinstance(entry, dict) else source_url,
+        "webpage_url": entry.get("webpage_url") or entry.get("original_url") or source_url if isinstance(entry, dict) else source_url,
+        "file_name": os.path.basename(txt_path),
+        "file_path": txt_path,
+        "txt_path": txt_path,
+        "downloaded_at": datetime.now().isoformat(),
+        "engine": "ytdlp_subtitle",
+        "transcript": text,
+    }
+
+
+def _iter_subtitle_languages(subtitle_map):
+    for lang in subtitle_map or {}:
+        if not lang or lang == "live_chat":
+            continue
+        yield lang
+
+
+def _youtube_subtitle_language_options(info):
+    if not isinstance(info, dict):
+        return [["all", "-live_chat"]]
+
+    subtitles = info.get("subtitles") or {}
+    automatic_captions = info.get("automatic_captions") or {}
+    languages = []
+    preferred_candidates = [
+        info.get("language"),
+        info.get("language_code"),
+        info.get("requested_subtitles") and next(iter(info.get("requested_subtitles") or {}), None),
+    ]
+
+    def add_language(lang):
+        if lang and lang != "live_chat" and lang not in languages:
+            languages.append(lang)
+
+    for candidate in preferred_candidates:
+        original_candidate = f"{candidate}-orig" if candidate else None
+        if original_candidate and (original_candidate in subtitles or original_candidate in automatic_captions):
+            add_language(original_candidate)
+        if candidate and (candidate in subtitles or candidate in automatic_captions):
+            add_language(candidate)
+
+    for lang in _iter_subtitle_languages(subtitles):
+        if lang.endswith("-orig"):
+            add_language(lang)
+    for lang in _iter_subtitle_languages(automatic_captions):
+        if lang.endswith("-orig"):
+            add_language(lang)
+    for lang in _iter_subtitle_languages(subtitles):
+        add_language(lang)
+    for lang in _iter_subtitle_languages(automatic_captions):
+        add_language(lang)
+
+    options = [[lang] for lang in languages]
+    options.append(["all", "-live_chat"])
+    return options
+
+
 def download_youtube_transcript_ytdlp(url, save_path, cookie_path=None):
-    """yt-dlp ile YouTube altyazısını indirir, VTT→TXT çevirir. Ses indirmez."""
+    """Download YouTube subtitles with yt-dlp and convert VTT files to plain text."""
     abs_save_path = os.path.abspath(save_path)
     os.makedirs(abs_save_path, exist_ok=True)
     ffmpeg_dir = get_ffmpeg_dir()
+    existing_vtt_files = _find_vtt_files(abs_save_path)
 
-    ydl_opts = {
+    base_ydl_opts = {
         "quiet": True,
         "no_warnings": True,
         "logger": YtDlpMessageBridge("youtube.transcript"),
         "windowsfilenames": True,
-        "cookiefile": None,
+        "cookiefile": cookie_path,
+        "http_headers": {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        },
         "ffmpeg_location": str(ffmpeg_dir) if ffmpeg_dir else "ffmpeg",
+        "js_runtimes": {"deno": {"path": None}, "node": {"path": None}},
+        "remote_components": ["ejs:github"],
         "skip_download": True,
-        "writeautomaticsub": True,
-        "subtitleslangs": ["tr", "en"],
         "subtitlesformat": "vtt",
         "paths": {"home": abs_save_path, "subtitle": abs_save_path},
         "outtmpl": "%(title)s [%(id)s].%(ext)s",
         "ignoreerrors": True,
+        "noplaylist": False,
         "extractor_args": {
-            "youtube": {"player_client": ["android", "web"]}
+            "youtube": {"player_client": ["android", "ios", "web"]}
         },
     }
+    probe_opts = dict(base_ydl_opts)
+    probe_opts["skip_download"] = True
+    probe_opts["writesubtitles"] = False
+    probe_opts["writeautomaticsub"] = False
 
-    log_info(logger, "yt-dlp altyazi indirme basladi", stage="youtube.transcript", url=url, save_path=abs_save_path)
+    log_info(
+        logger,
+        "yt-dlp altyazi indirme basladi",
+        stage="youtube.transcript",
+        url=url,
+        save_path=abs_save_path,
+        cookie_file=cookie_path or "yok",
+    )
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.extract_info(url, download=True)
+    with yt_dlp.YoutubeDL(probe_opts) as ydl:
+        info = ydl.extract_info(url, download=False)
 
-    vtt_files = _find_vtt_files(abs_save_path)
+    download_info = info
+    selected_subtitle_languages = None
+    for subtitle_languages in _youtube_subtitle_language_options(info):
+        before_attempt_vtt_files = _find_vtt_files(abs_save_path)
+        ydl_opts = dict(base_ydl_opts)
+        ydl_opts.update({
+            "writesubtitles": True,
+            "writeautomaticsub": True,
+            "subtitleslangs": subtitle_languages,
+        })
+
+        log_info(
+            logger,
+            "yt-dlp altyazi dili deneniyor",
+            stage="youtube.transcript",
+            url=url,
+            subtitle_language=",".join(subtitle_languages),
+        )
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            download_info = ydl.extract_info(url, download=True)
+
+        attempt_vtt_files = _find_vtt_files(abs_save_path, existing_files=before_attempt_vtt_files)
+        if attempt_vtt_files:
+            selected_subtitle_languages = subtitle_languages
+            log_info(
+                logger,
+                "yt-dlp altyazi dili secildi",
+                stage="youtube.transcript",
+                url=url,
+                subtitle_language=",".join(subtitle_languages),
+                file_count=len(attempt_vtt_files),
+            )
+            break
+
+        log_warning(
+            logger,
+            "yt-dlp altyazi dili dosya uretmedi, sonraki dil denenecek",
+            stage="youtube.transcript",
+            url=url,
+            subtitle_language=",".join(subtitle_languages),
+        )
+
+    if selected_subtitle_languages is None:
+        log_warning(logger, "yt-dlp altyazi indirme hic dosya uretmedi", stage="youtube.transcript", url=url)
+
+    entries = []
+    if isinstance(download_info, dict) and download_info.get("entries"):
+        entries = [entry for entry in download_info.get("entries") or [] if entry]
+    elif isinstance(download_info, dict):
+        entries = [download_info]
+
+    new_vtt_files = _find_vtt_files(abs_save_path, existing_files=existing_vtt_files)
     items = []
-    for vtt_path in vtt_files:
+    for index, vtt_path in enumerate(new_vtt_files):
         try:
             txt_path = _vtt_to_txt(vtt_path)
-            items.append({"txt_path": txt_path})
+            entry = entries[index] if index < len(entries) else {}
+            item = _youtube_transcript_item_from_info(entry, txt_path, url)
+            items.append(item)
             log_info(logger, "VTT metin dosyasina donusturuldu", stage="youtube.transcript", txt_path=txt_path)
         except Exception:
             log_exception(logger, "VTT donusturme basarisiz", stage="youtube.transcript", vtt_path=vtt_path)
