@@ -1062,7 +1062,13 @@ def list_youtube_video_urls(url, cookie_path=None):
         return []
 
     base_url = _channel_base_url(url)
-    tabs_to_fetch = [base_url + "/videos", base_url + "/shorts"]
+    stripped = url.rstrip("/")
+    if stripped.endswith("/shorts"):
+        tabs_to_fetch = [base_url + "/shorts"]
+    elif stripped.endswith("/videos"):
+        tabs_to_fetch = [base_url + "/videos"]
+    else:
+        tabs_to_fetch = [base_url + "/videos", base_url + "/shorts"]
 
     seen = set()
     all_items = []
@@ -1264,61 +1270,13 @@ def _youtube_transcript_item_from_info(entry, txt_path, source_url):
     }
 
 
-def _iter_subtitle_languages(subtitle_map):
-    for lang in subtitle_map or {}:
-        if not lang or lang == "live_chat":
-            continue
-        yield lang
-
-
-def _youtube_subtitle_language_options(info):
-    if not isinstance(info, dict):
-        return [["all", "-live_chat"]]
-
-    subtitles = info.get("subtitles") or {}
-    automatic_captions = info.get("automatic_captions") or {}
-    languages = []
-    preferred_candidates = [
-        info.get("language"),
-        info.get("language_code"),
-        info.get("requested_subtitles") and next(iter(info.get("requested_subtitles") or {}), None),
-    ]
-
-    def add_language(lang):
-        if lang and lang != "live_chat" and lang not in languages:
-            languages.append(lang)
-
-    for candidate in preferred_candidates:
-        original_candidate = f"{candidate}-orig" if candidate else None
-        if original_candidate and (original_candidate in subtitles or original_candidate in automatic_captions):
-            add_language(original_candidate)
-        if candidate and (candidate in subtitles or candidate in automatic_captions):
-            add_language(candidate)
-
-    for lang in _iter_subtitle_languages(subtitles):
-        if lang.endswith("-orig"):
-            add_language(lang)
-    for lang in _iter_subtitle_languages(automatic_captions):
-        if lang.endswith("-orig"):
-            add_language(lang)
-    for lang in _iter_subtitle_languages(subtitles):
-        add_language(lang)
-    for lang in _iter_subtitle_languages(automatic_captions):
-        add_language(lang)
-
-    options = [[lang] for lang in languages]
-    options.append(["all", "-live_chat"])
-    return options
-
-
 def download_youtube_transcript_ytdlp(url, save_path, cookie_path=None):
-    """Download YouTube subtitles with yt-dlp and convert VTT files to plain text."""
     abs_save_path = os.path.abspath(save_path)
     os.makedirs(abs_save_path, exist_ok=True)
     ffmpeg_dir = get_ffmpeg_dir()
     existing_vtt_files = _find_vtt_files(abs_save_path)
 
-    base_ydl_opts = {
+    opts = {
         "quiet": True,
         "no_warnings": True,
         "logger": YtDlpMessageBridge("youtube.transcript"),
@@ -1330,10 +1288,11 @@ def download_youtube_transcript_ytdlp(url, save_path, cookie_path=None):
             "Chrome/124.0.0.0 Safari/537.36"
         },
         "ffmpeg_location": str(ffmpeg_dir) if ffmpeg_dir else "ffmpeg",
-        "js_runtimes": {"deno": {"path": None}, "node": {"path": None}},
-        "remote_components": ["ejs:github"],
         "skip_download": True,
+        "writesubtitles": True,
+        "writeautomaticsub": True,
         "subtitlesformat": "vtt",
+        "subtitleslangs": ["tr"],
         "paths": {"home": abs_save_path, "subtitle": abs_save_path},
         "outtmpl": "%(title)s [%(id)s].%(ext)s",
         "ignoreerrors": True,
@@ -1342,10 +1301,6 @@ def download_youtube_transcript_ytdlp(url, save_path, cookie_path=None):
             "youtube": {"player_client": ["android", "ios", "web"]}
         },
     }
-    probe_opts = dict(base_ydl_opts)
-    probe_opts["skip_download"] = True
-    probe_opts["writesubtitles"] = False
-    probe_opts["writeautomaticsub"] = False
 
     log_info(
         logger,
@@ -1356,62 +1311,20 @@ def download_youtube_transcript_ytdlp(url, save_path, cookie_path=None):
         cookie_file=cookie_path or "yok",
     )
 
-    with yt_dlp.YoutubeDL(probe_opts) as ydl:
-        info = ydl.extract_info(url, download=False)
-
-    download_info = info
-    selected_subtitle_languages = None
-    for subtitle_languages in _youtube_subtitle_language_options(info):
-        before_attempt_vtt_files = _find_vtt_files(abs_save_path)
-        ydl_opts = dict(base_ydl_opts)
-        ydl_opts.update({
-            "writesubtitles": True,
-            "writeautomaticsub": True,
-            "subtitleslangs": subtitle_languages,
-        })
-
-        log_info(
-            logger,
-            "yt-dlp altyazi dili deneniyor",
-            stage="youtube.transcript",
-            url=url,
-            subtitle_language=",".join(subtitle_languages),
-        )
-
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            download_info = ydl.extract_info(url, download=True)
-
-        attempt_vtt_files = _find_vtt_files(abs_save_path, existing_files=before_attempt_vtt_files)
-        if attempt_vtt_files:
-            selected_subtitle_languages = subtitle_languages
-            log_info(
-                logger,
-                "yt-dlp altyazi dili secildi",
-                stage="youtube.transcript",
-                url=url,
-                subtitle_language=",".join(subtitle_languages),
-                file_count=len(attempt_vtt_files),
-            )
-            break
-
-        log_warning(
-            logger,
-            "yt-dlp altyazi dili dosya uretmedi, sonraki dil denenecek",
-            stage="youtube.transcript",
-            url=url,
-            subtitle_language=",".join(subtitle_languages),
-        )
-
-    if selected_subtitle_languages is None:
-        log_warning(logger, "yt-dlp altyazi indirme hic dosya uretmedi", stage="youtube.transcript", url=url)
-
-    entries = []
-    if isinstance(download_info, dict) and download_info.get("entries"):
-        entries = [entry for entry in download_info.get("entries") or [] if entry]
-    elif isinstance(download_info, dict):
-        entries = [download_info]
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=True)
 
     new_vtt_files = _find_vtt_files(abs_save_path, existing_files=existing_vtt_files)
+    if not new_vtt_files:
+        log_warning(logger, "yt-dlp altyazi dosyasi uretilmedi, atlaniyor", stage="youtube.transcript", url=url)
+        return []
+
+    entries = []
+    if isinstance(info, dict) and info.get("entries"):
+        entries = [entry for entry in info.get("entries") or [] if entry]
+    elif isinstance(info, dict):
+        entries = [info]
+
     items = []
     for index, vtt_path in enumerate(new_vtt_files):
         try:

@@ -24,6 +24,9 @@ from utils.youtube_utils import extract_youtube_channel_name, extract_youtube_vi
 
 app = Flask(__name__)
 
+TRANSCRIPT_DELAY_SECONDS = 3
+BULK_DOWNLOAD_DELAY_SECONDS = 10
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.expanduser("~/")
 AUDIO_DIR = os.path.join(UPLOAD_DIR, "audiofiles")
@@ -330,6 +333,7 @@ def _process_audio_item(url, *, cookie_path=None, mode="download", source_type=N
         if platform == "youtube":
             if video_id:
                 try:
+                    time.sleep(TRANSCRIPT_DELAY_SECONDS)
                     transcript_dir = _ytdlp_transcript_dir(hint_folder or _folder_name_from_path(dest_path) or source_name)
                     transcript_payload, text = _youtube_subtitle_transcript(url, transcript_dir, cookie_path=resolved_cookie)
                     engine = "ytdlp_subtitle"
@@ -571,7 +575,7 @@ def _single_audio_payload(url, cookie_path=None, mode="download"):
 
     for index, source_item in enumerate(source_items, start=1):
         if index > 1:
-            time.sleep(3)
+            time.sleep(BULK_DOWNLOAD_DELAY_SECONDS)
         item_url = source_item.get("url")
         if not item_url:
             continue
