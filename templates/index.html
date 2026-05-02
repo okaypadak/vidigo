@@ -268,6 +268,16 @@
       color: var(--text);
     }
 
+    .btn-danger {
+      background: linear-gradient(135deg, rgba(255, 92, 169, 0.18), rgba(255, 92, 169, 0.06));
+      border-color: rgba(255, 92, 169, 0.6);
+      color: var(--pink);
+    }
+
+    .btn-danger:hover {
+      box-shadow: 0 10px 24px rgba(255, 92, 169, 0.18);
+    }
+
     .btn:hover {
       transform: translateY(-1px);
       box-shadow: 0 10px 24px rgba(0, 0, 0, 0.24);
@@ -440,10 +450,11 @@
           <div class="badge">Instagram reel</div>
           <div class="badge">Instagram hesap</div>
         </div>
-        <div class="actions">
-          <button class="btn btn-secondary" type="button" onclick="downloadSingle('transcript_only')">Sadece Transkript</button>
-          <button class="btn btn-ghost" type="button" onclick="downloadSingle('mp3_only')">Sadece MP3</button>
-          <button class="btn btn-primary" type="button" onclick="downloadSingle('download')">Indir</button>
+        <div class="actions" id="downloadActions">
+          <button class="btn btn-secondary" id="btnTranscript" type="button" onclick="downloadSingle('transcript_only')">Sadece Transkript</button>
+          <button class="btn btn-ghost" id="btnMp3" type="button" onclick="downloadSingle('mp3_only')">Sadece MP3</button>
+          <button class="btn btn-primary" id="btnDownload" type="button" onclick="downloadSingle('download')">Indir</button>
+          <button class="btn btn-danger" id="btnStop" type="button" onclick="cancelDownload()" style="display:none">Durdur</button>
         </div>
         <div class="hint">
           Cookie gerekiyorsa <code>~/cookie/youtube.txt</code> ve <code>~/cookie/instagram.txt</code> dosyalarini kullanir.
@@ -476,6 +487,31 @@
     let toastTimer;
     let liveLogSource = null;
     let liveLogCloseTimer = null;
+    let currentOperationId = null;
+
+    function setDownloadBusy(busy) {
+      const ids = ["btnTranscript", "btnMp3", "btnDownload"];
+      ids.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.disabled = busy;
+      });
+      const stop = document.getElementById("btnStop");
+      if (stop) stop.style.display = busy ? "inline-flex" : "none";
+    }
+
+    async function cancelDownload() {
+      if (!currentOperationId) return;
+      try {
+        await fetch("/cancel", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ operation_id: currentOperationId })
+        });
+        showToast("Durdurma istegi gonderildi", "");
+      } catch {
+        showToast("Durdurma isteği gönderilemedi", "err");
+      }
+    }
 
     async function checkGpuStatus() {
       try {
@@ -580,7 +616,9 @@
 
       setResult("");
       const operationId = createOperationId();
+      currentOperationId = operationId;
       startLiveLog(operationId);
+      setDownloadBusy(true);
       const modeLabel = mode === "transcript_only" ? "Transkript" : mode === "mp3_only" ? "MP3" : "Indir";
       showToast(`${modeLabel} islemi basladi`);
       try {
@@ -597,12 +635,21 @@
           throw new Error(data.error || "Indirme basarisiz");
         }
         setResult(data);
-        showToast(`Tamamlandi: ${data.item_count || 0} oge`, "ok");
-        finishLiveLog("ISLEM BITTI");
+        if (data.status === "cancelled") {
+          showToast("Indirme durduruldu", "");
+          finishLiveLog("DURDURULDU");
+        } else {
+          const skipped = data.skipped_count ? `, ${data.skipped_count} atlandı` : "";
+          showToast(`Tamamlandi: ${data.item_count || 0} oge${skipped}`, "ok");
+          finishLiveLog("ISLEM BITTI");
+        }
       } catch (error) {
         setResult({ error: error.message || "Indirme basarisiz" });
         showToast(error.message || "Indirme basarisiz", "err");
         finishLiveLog("ISLEM HATA ILE BITTI");
+      } finally {
+        currentOperationId = null;
+        setDownloadBusy(false);
       }
     }
 

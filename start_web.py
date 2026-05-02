@@ -2,6 +2,7 @@
 import os
 import queue
 import shutil
+import threading
 import time
 import uuid
 from datetime import datetime
@@ -26,6 +27,10 @@ app = Flask(__name__)
 
 TRANSCRIPT_DELAY_SECONDS = 3
 BULK_DOWNLOAD_DELAY_SECONDS = 10
+
+# operation_id -> threading.Event; set() = iptal istendi
+_CANCEL_FLAGS: dict = {}
+_CANCEL_FLAGS_LOCK = threading.Lock()
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.expanduser("~/")
@@ -557,7 +562,7 @@ def _instagram_profile_payload(url, cookie_path=None, mode="download"):
     }
 
 
-def _single_audio_payload(url, cookie_path=None, mode="download"):
+def _single_audio_payload(url, cookie_path=None, mode="download", cancel_event=None):
     transcript_enabled = mode in {"download", "transcript_only"}
     request, source_items = _expand_source_items(url, cookie_path=cookie_path)
     if not source_items:
@@ -580,18 +585,28 @@ def _single_audio_payload(url, cookie_path=None, mode="download"):
         except Exception:
             pass
     transcribed_count = 0
+    skipped_count = 0
 
     for index, source_item in enumerate(source_items, start=1):
+        if cancel_event and cancel_event.is_set():
+            log_info(logger, "Indirme kullanici tarafindan iptal edildi", stage="single.pipeline", index=index)
+            break
         if index > 1:
             time.sleep(BULK_DOWNLOAD_DELAY_SECONDS)
         item_url = source_item.get("url")
         if not item_url:
             continue
 
-        # Zaten indirilmiÅŸse atla
+        # Zaten indirilmisse atla
         video_id = source_item.get("video_id")
+        if not video_id:
+            if request["platform"] == "youtube":
+                video_id = extract_youtube_video_id(item_url)
+            else:
+                video_id = extract_instagram_shortcode(item_url)
         if video_id and _already_downloaded(video_id, mode):
             log_info(logger, "Video zaten indirilmis, atlaniyor", stage="single.pipeline", index=index, total=len(source_items), video_id=video_id)
+            skipped_count += 1
             continue
 
         log_info(
@@ -635,6 +650,7 @@ def _single_audio_payload(url, cookie_path=None, mode="download"):
         "downloader": "audio+transcript" if transcript_enabled else "audio",
         "engine": engine,
         "item_count": len(items),
+        "skipped_count": skipped_count,
         "transcribed_count": transcribed_count,
         "items": items,
     }
@@ -706,6 +722,21 @@ def history():
         return _json_response({"error": f"Gecmis yuklenemedi: {str(exc)}"}, status=500, operation_id=operation_id)
 
 
+@app.route("/cancel", methods=["POST"])
+def cancel_operation():
+    data = request.get_json(silent=True) or {}
+    operation_id = (data.get("operation_id") or "").strip()
+    if not operation_id:
+        return _json_response({"error": "operation_id gerekli."}, status=400)
+    with _CANCEL_FLAGS_LOCK:
+        event = _CANCEL_FLAGS.get(operation_id)
+    if event:
+        event.set()
+        log_info(logger, "Indirme iptal edildi", stage="cancel.requested", operation_id=operation_id)
+        return _json_response({"status": "cancelled", "operation_id": operation_id})
+    return _json_response({"status": "not_found", "operation_id": operation_id}, status=404)
+
+
 @app.route("/download_media", methods=["POST"])
 def download_media_route():
     operation_id = _operation_id_from_request()
@@ -717,20 +748,27 @@ def download_media_route():
     if not url:
         return _json_response({"error": "Indirilecek URL gerekli."}, status=400, operation_id=operation_id)
 
+    cancel_event = threading.Event()
+    with _CANCEL_FLAGS_LOCK:
+        _CANCEL_FLAGS[operation_id] = cancel_event
+
     try:
         with bind_operation(operation_id):
             log_info(logger, "Tekli indirme istegi alindi", stage="request.accepted", url=url, cookie_path=cookie_path or "auto")
             if mode not in {"download", "mp3_only", "transcript_only"}:
                 raise ValueError("Gecersiz mod. 'download', 'mp3_only' veya 'transcript_only' olmali.")
-            payload = _single_audio_payload(url, cookie_path=cookie_path, mode=mode)
+            payload = _single_audio_payload(url, cookie_path=cookie_path, mode=mode, cancel_event=cancel_event)
+            cancelled = cancel_event.is_set()
             log_info(
                 logger,
-                "Tekli indirme istegi tamamlandi",
+                "Tekli indirme istegi tamamlandi" if not cancelled else "Tekli indirme iptal edildi",
                 stage="request.completed",
                 url=url,
                 item_count=payload.get("item_count", 0),
+                cancelled=cancelled,
             )
-            return _json_response({"status": "success", **payload}, operation_id=operation_id)
+            status_val = "cancelled" if cancelled else "success"
+            return _json_response({"status": status_val, **payload}, operation_id=operation_id)
     except ValueError as exc:
         with bind_operation(operation_id):
             log_warning(logger, "Gecersiz indirme istegi", stage="request.validation", url=url, error=str(exc))
@@ -739,6 +777,9 @@ def download_media_route():
         with bind_operation(operation_id):
             log_exception(logger, "Tekli indirme akisi basarisiz oldu", stage="request.failed", url=url)
         return _json_response({"error": f"Indirme hatasi: {str(exc)}"}, status=500, operation_id=operation_id)
+    finally:
+        with _CANCEL_FLAGS_LOCK:
+            _CANCEL_FLAGS.pop(operation_id, None)
 
 
 @app.route("/instagram_transcribe", methods=["POST"])

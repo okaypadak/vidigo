@@ -42,10 +42,18 @@ def _transcript_target_dir(folder_name=None, media_dir=None):
     return path
 
 
+def _fs_safe_name(value):
+    """Dosya sistemi için geçersiz karakterleri kaldırır, orijinal başlık korunur."""
+    text = str(value or "").strip()
+    text = re.sub(r'[\\/:*?"<>|]', "_", text)
+    text = text.strip(". ")
+    return text or "transcript"
+
+
 def get_transcript_text_filepath(video_name, video_id=None, folder_name=None, media_dir=None):
-    base_name = _slugify(video_name) if video_name else ""
+    base_name = _fs_safe_name(video_name) if video_name else ""
     if not base_name and video_id:
-        base_name = _slugify(video_id)
+        base_name = _fs_safe_name(video_id)
     if not base_name:
         base_name = "transcript"
     return os.path.join(_transcript_target_dir(folder_name, media_dir=media_dir), f"{base_name}.txt")
