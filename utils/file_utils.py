@@ -74,6 +74,21 @@ def save_transcript_to_file(video_id, data):
         os.replace(temp_txt_path, txt_path)
 
 
+def save_output_transcript_to_file(video_name, text, folder_name=None, operation_id=None):
+    txt_path = get_transcript_text_filepath(video_name, video_id=operation_id, folder_name=folder_name)
+    if os.path.exists(txt_path):
+        stem, ext = os.path.splitext(txt_path)
+        suffix = _fs_safe_name(operation_id) if operation_id else datetime.now().strftime("%Y%m%d-%H%M%S")
+        txt_path = f"{stem}-{suffix}{ext}"
+
+    with _FILE_WRITE_LOCK:
+        temp_txt_path = f"{txt_path}.tmp"
+        with open(temp_txt_path, "w", encoding="utf-8") as f:
+            f.write((text or "").strip())
+        os.replace(temp_txt_path, txt_path)
+    return txt_path
+
+
 def save_download_record(video_name, transcript=None, **extra_fields):
     record = {
         "video_name": video_name,

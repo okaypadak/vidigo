@@ -1,7 +1,7 @@
 import os
 import textwrap
 import pytest
-from utils.video_downloader import _vtt_to_txt
+from utils.video_downloader import _rename_youtube_transcript_txt, _vtt_to_txt
 
 
 @pytest.fixture
@@ -42,6 +42,35 @@ def test_vtt_to_txt_strips_timestamps(tmp_vtt):
     text = open(txt_path, encoding="utf-8").read()
     assert "-->" not in text
     assert "WEBVTT" not in text
+
+
+def test_rename_youtube_transcript_removes_video_id_and_hashtags(tmp_path):
+    txt_path = tmp_path / "Video Basligi #etiket #shorts [abc123].txt"
+    txt_path.write_text("metin", encoding="utf-8")
+
+    renamed = _rename_youtube_transcript_txt(
+        str(txt_path),
+        {"id": "abc123", "title": "Video Basligi #etiket #shorts"},
+    )
+
+    assert os.path.basename(renamed) == "Video Basligi.txt"
+    assert os.path.isfile(renamed)
+    assert not os.path.exists(txt_path)
+
+
+def test_rename_youtube_transcript_keeps_unique_clean_titles(tmp_path):
+    existing = tmp_path / "Video Basligi.txt"
+    txt_path = tmp_path / "Video Basligi #etiket [def456].txt"
+    existing.write_text("onceki", encoding="utf-8")
+    txt_path.write_text("metin", encoding="utf-8")
+
+    renamed = _rename_youtube_transcript_txt(
+        str(txt_path),
+        {"id": "def456", "title": "Video Basligi #etiket"},
+    )
+
+    assert os.path.basename(renamed) == "Video Basligi (2).txt"
+    assert os.path.isfile(renamed)
 
 
 def test_vtt_to_txt_deduplicates(tmp_vtt):

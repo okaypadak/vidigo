@@ -56,6 +56,15 @@ def build_unique_filepath(directory, title, extension):
         counter += 1
 
 
+def strip_title_hashtags(title):
+    text = re.sub(r"(?<!\w)#\S+", " ", str(title or ""))
+    text = re.sub(r"\s+", " ", text).strip(" -_")
+    return text
+
+
+_strip_title_hashtags = strip_title_hashtags
+
+
 def extract_instagram_shortcode(url):
     parsed = _parse_url(url)
     if not parsed:
@@ -1312,14 +1321,32 @@ def _find_vtt_files(directory, existing_files=None):
     return result
 
 
+def _clean_youtube_transcript_title(entry, txt_path):
+    title = entry.get("title") if isinstance(entry, dict) else None
+    if not title:
+        title = os.path.splitext(os.path.basename(txt_path))[0]
+        title = re.sub(r"\s*\[[^\]]+\]\s*$", "", title)
+    title = _strip_title_hashtags(title)
+    return title or os.path.splitext(os.path.basename(txt_path))[0]
+
+
+def _rename_youtube_transcript_txt(txt_path, entry):
+    title = _clean_youtube_transcript_title(entry, txt_path)
+    target_path = build_unique_filepath(os.path.dirname(txt_path), title, ".txt")
+    if os.path.abspath(target_path) != os.path.abspath(txt_path):
+        os.replace(txt_path, target_path)
+    return target_path
+
+
 def _youtube_transcript_item_from_info(entry, txt_path, source_url):
     video_id = entry.get("id") if isinstance(entry, dict) else None
+    title = _clean_youtube_transcript_title(entry, txt_path)
     with open(txt_path, encoding="utf-8") as f:
         text = f.read()
     return {
         "id": video_id,
         "video_id": video_id,
-        "title": entry.get("title") or video_id if isinstance(entry, dict) else os.path.splitext(os.path.basename(txt_path))[0],
+        "title": title,
         "platform": "youtube",
         "uploader": entry.get("uploader") or entry.get("channel") if isinstance(entry, dict) else None,
         "source_url": entry.get("webpage_url") or entry.get("original_url") or source_url if isinstance(entry, dict) else source_url,
@@ -1393,6 +1420,7 @@ def download_youtube_transcript_ytdlp(url, save_path, cookie_path=None):
         try:
             txt_path = _vtt_to_txt(vtt_path)
             entry = entries[index] if index < len(entries) else {}
+            txt_path = _rename_youtube_transcript_txt(txt_path, entry)
             item = _youtube_transcript_item_from_info(entry, txt_path, url)
             items.append(item)
             log_info(logger, "VTT metin dosyasina donusturuldu", stage="youtube.transcript", txt_path=txt_path)
