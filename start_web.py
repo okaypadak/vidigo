@@ -21,6 +21,7 @@ from utils.app_logging import (
 )
 from utils.download_service import COOKIE_ROOT, classify_download_url
 from utils.file_utils import load_download_history, save_download_record, save_output_transcript_to_file, save_transcript_to_file, upsert_download_record, upsert_manifest_item
+from utils.markitdown_converter import convert_file_to_markdown, save_markdown_output
 from utils.video_downloader import build_unique_filepath, download_audio_generic, download_instagram_profile_reels, download_youtube_transcript_ytdlp, extract_instagram_shortcode, extract_instagram_username, list_youtube_video_urls, resolve_cookie_file, sanitize_filename, save_channel_catalog, strip_title_hashtags
 from utils.youtube_utils import extract_youtube_channel_name, extract_youtube_video_id
 
@@ -41,13 +42,16 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.expanduser("~/")
 AUDIO_DIR = os.path.join(UPLOAD_DIR, "audiofiles")
 DOWNLOAD_DIR = os.path.join(BASE_DIR, "downloads")
+MARKITDOWN_UPLOAD_DIR = os.path.join(DOWNLOAD_DIR, "markitdown_uploads")
 LOG_DIR = os.path.join(UPLOAD_DIR, "vidigo_logs")
 LOG_PATH = os.path.join(LOG_DIR, "app.log")
 
 os.makedirs(AUDIO_DIR, exist_ok=True)
+os.makedirs(MARKITDOWN_UPLOAD_DIR, exist_ok=True)
 os.makedirs(LOG_DIR, exist_ok=True)
 
 configure_logging(LOG_PATH)
+logging.getLogger("werkzeug").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
@@ -639,6 +643,7 @@ def _already_downloaded(video_id, mode):
 def _instagram_profile_payload(url, cookie_path=None, mode="download"):
     transcript_enabled = mode in {"download", "transcript_only"}
     keep_audio = mode in {"download", "mp3_only"}
+    audio_only = mode in {"mp3_only", "transcript_only"}
 
     resolved_cookie = resolve_cookie_file("instagram", cookie_path=cookie_path, cookie_dir=COOKIE_ROOT)
     username = extract_instagram_username(url)
@@ -650,7 +655,7 @@ def _instagram_profile_payload(url, cookie_path=None, mode="download"):
         url,
         save_path=account_save_dir,
         cookie_path=resolved_cookie,
-        audio_only=True,
+        audio_only=audio_only,
     )
     result["downloader"] = "instaloader"
 
@@ -975,6 +980,76 @@ def cancel_operation():
     return _json_response({"status": "not_found", "operation_id": operation_id}, status=404)
 
 
+def _markitdown_source_from_request():
+    upload = request.files.get("file")
+    if upload and upload.filename:
+        safe_name = sanitize_filename(upload.filename)
+        stem, extension = os.path.splitext(safe_name)
+        target_path = build_unique_filepath(MARKITDOWN_UPLOAD_DIR, stem or "document", extension)
+        upload.save(target_path)
+        return target_path, True
+
+    data = request.get_json(silent=True) or {}
+    file_path = (data.get("file_path") or "").strip()
+    if not file_path:
+        raise ValueError("Markdown'a cevrilecek dosya veya file_path gerekli.")
+    return file_path, False
+
+
+@app.route("/convert_file_to_markdown", methods=["POST"])
+def convert_file_to_markdown_route():
+    operation_id = _operation_id_from_request()
+    try:
+        with bind_operation(operation_id):
+            source_path, uploaded = _markitdown_source_from_request()
+            log_info(
+                logger,
+                "MarkItDown donusturme istegi alindi",
+                stage="markitdown.convert",
+                file_path=source_path,
+                uploaded=uploaded,
+            )
+            markdown = convert_file_to_markdown(source_path)
+            markdown_path = save_markdown_output(source_path, markdown)
+            save_download_record(
+                video_name=os.path.splitext(os.path.basename(source_path))[0] or "document",
+                transcript=markdown,
+                platform="file",
+                source_type="document",
+                engine="markitdown",
+                file_name=os.path.basename(source_path),
+                file_path=os.path.abspath(source_path),
+                markdown_path=markdown_path,
+                downloader="markitdown",
+            )
+            log_info(
+                logger,
+                "MarkItDown donusturme tamamlandi",
+                stage="markitdown.convert",
+                file_path=source_path,
+                markdown_path=markdown_path,
+                text_length=len(markdown),
+            )
+            return _json_response(
+                {
+                    "status": "success",
+                    "engine": "markitdown",
+                    "file_path": os.path.abspath(source_path),
+                    "markdown_path": markdown_path,
+                    "text": markdown,
+                },
+                operation_id=operation_id,
+            )
+    except ValueError as exc:
+        with bind_operation(operation_id):
+            log_warning(logger, "MarkItDown istegi gecersiz", stage="markitdown.validation", error=str(exc))
+        return _json_response({"error": str(exc)}, status=400, operation_id=operation_id)
+    except Exception as exc:
+        with bind_operation(operation_id):
+            log_exception(logger, "MarkItDown donusturme basarisiz oldu", stage="markitdown.convert")
+        return _json_response({"error": f"Markdown donusturme hatasi: {str(exc)}"}, status=500, operation_id=operation_id)
+
+
 @app.route("/download_media", methods=["POST"])
 def download_media_route():
     operation_id = _operation_id_from_request()
@@ -1005,7 +1080,7 @@ def download_media_route():
 
     try:
         with bind_operation(operation_id):
-            log_info(logger, "Tekli indirme istegi alindi", stage="request.accepted", url=url, cookie_path=cookie_path or "auto")
+            log_info(logger, "URL indirme istegi alindi", stage="request.accepted", url=url, cookie_path=cookie_path or "auto")
             if mode not in {"download", "mp3_only", "transcript_only"}:
                 raise ValueError("Gecersiz mod. 'download', 'mp3_only' veya 'transcript_only' olmali.")
             payload = _single_audio_payload(url, cookie_path=cookie_path, mode=mode, cancel_event=cancel_event)
@@ -1014,7 +1089,7 @@ def download_media_route():
             cancelled = cancel_event.is_set()
             log_info(
                 logger,
-                "Tekli indirme istegi tamamlandi" if not cancelled else "Tekli indirme iptal edildi",
+                "URL indirme istegi tamamlandi" if not cancelled else "URL indirme iptal edildi",
                 stage="request.completed",
                 url=url,
                 item_count=payload.get("item_count", 0),
@@ -1029,7 +1104,7 @@ def download_media_route():
         return _json_response({"error": str(exc)}, status=400, operation_id=operation_id)
     except Exception as exc:
         with bind_operation(operation_id):
-            log_exception(logger, "Tekli indirme akisi basarisiz oldu", stage="request.failed", url=url)
+            log_exception(logger, "URL indirme akisi basarisiz oldu", stage="request.failed", url=url, error=str(exc))
         _set_operation_progress(operation_id, active=False, status="error", error=str(exc))
         return _json_response({"error": f"Indirme hatasi: {str(exc)}"}, status=500, operation_id=operation_id)
     finally:
