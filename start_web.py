@@ -21,7 +21,6 @@ from utils.app_logging import (
 )
 from utils.download_service import COOKIE_ROOT, classify_download_url
 from utils.file_utils import load_download_history, save_download_record, save_output_transcript_to_file, save_transcript_to_file, upsert_download_record, upsert_manifest_item
-from utils.markitdown_converter import convert_file_to_markdown, save_markdown_output
 from utils.video_downloader import build_unique_filepath, download_audio_generic, download_instagram_profile_reels, download_youtube_transcript_ytdlp, extract_instagram_shortcode, extract_instagram_username, list_youtube_video_urls, resolve_cookie_file, sanitize_filename, save_channel_catalog, strip_title_hashtags
 from utils.youtube_utils import extract_youtube_channel_name, extract_youtube_video_id
 
@@ -40,14 +39,13 @@ _PROGRESS_LOCK = threading.Lock()
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.expanduser("~/")
-AUDIO_DIR = os.path.join(UPLOAD_DIR, "audiofiles")
+# Indirilen medya kullanicinin sabit Vidigo klasorunde tutulur.
+AUDIO_DIR = os.path.join(UPLOAD_DIR, "vidigo")
 DOWNLOAD_DIR = os.path.join(BASE_DIR, "downloads")
-MARKITDOWN_UPLOAD_DIR = os.path.join(DOWNLOAD_DIR, "markitdown_uploads")
 LOG_DIR = os.path.join(UPLOAD_DIR, "vidigo_logs")
 LOG_PATH = os.path.join(LOG_DIR, "app.log")
 
 os.makedirs(AUDIO_DIR, exist_ok=True)
-os.makedirs(MARKITDOWN_UPLOAD_DIR, exist_ok=True)
 os.makedirs(LOG_DIR, exist_ok=True)
 
 configure_logging(LOG_PATH)
@@ -349,6 +347,10 @@ def _process_audio_item(url, *, cookie_path=None, mode="download", source_type=N
     keep_audio_files = mode in {"download", "mp3_only"}
     request = classify_download_url(url)
     platform = request["platform"]
+    # Instagram transkriptleri icin cikarilan M4A, kullanicinin Vidigo klasorunde
+    # sonraki kullanimlar icin tutulur.
+    if platform == "instagram" and mode == "transcript_only":
+        keep_audio_files = True
     item_source_type = source_type or request["source_type"]
     item_source_url = source_url or url
     resolved_cookie = resolve_cookie_file(platform, cookie_path=cookie_path, cookie_dir=COOKIE_ROOT)
@@ -777,7 +779,10 @@ def _single_audio_payload(url, cookie_path=None, mode="download", cancel_event=N
                 video_id = extract_youtube_video_id(item_url)
             else:
                 video_id = extract_instagram_shortcode(item_url)
-        if video_id and _already_downloaded(video_id, mode):
+        # Transkript istegi her seferinde medya dosyasini yeniden hazirlar. Eski bir
+        # TinyDB kaydi metin iceriyor olsa bile kullanicinin diskte bekledigi medya
+        # dosyasi kalmamis olabilir.
+        if video_id and mode != "transcript_only" and _already_downloaded(video_id, mode):
             log_info(logger, "Video zaten indirilmis, atlaniyor", stage="single.pipeline", index=index, total=len(source_items), video_id=video_id)
             skipped_count += 1
             _set_operation_progress(
@@ -978,76 +983,6 @@ def cancel_operation():
         log_info(logger, "Indirme iptal edildi", stage="cancel.requested", operation_id=operation_id)
         return _json_response({"status": "cancelled", "operation_id": operation_id})
     return _json_response({"status": "not_found", "operation_id": operation_id}, status=404)
-
-
-def _markitdown_source_from_request():
-    upload = request.files.get("file")
-    if upload and upload.filename:
-        safe_name = sanitize_filename(upload.filename)
-        stem, extension = os.path.splitext(safe_name)
-        target_path = build_unique_filepath(MARKITDOWN_UPLOAD_DIR, stem or "document", extension)
-        upload.save(target_path)
-        return target_path, True
-
-    data = request.get_json(silent=True) or {}
-    file_path = (data.get("file_path") or "").strip()
-    if not file_path:
-        raise ValueError("Markdown'a cevrilecek dosya veya file_path gerekli.")
-    return file_path, False
-
-
-@app.route("/convert_file_to_markdown", methods=["POST"])
-def convert_file_to_markdown_route():
-    operation_id = _operation_id_from_request()
-    try:
-        with bind_operation(operation_id):
-            source_path, uploaded = _markitdown_source_from_request()
-            log_info(
-                logger,
-                "MarkItDown donusturme istegi alindi",
-                stage="markitdown.convert",
-                file_path=source_path,
-                uploaded=uploaded,
-            )
-            markdown = convert_file_to_markdown(source_path)
-            markdown_path = save_markdown_output(source_path, markdown)
-            save_download_record(
-                video_name=os.path.splitext(os.path.basename(source_path))[0] or "document",
-                transcript=markdown,
-                platform="file",
-                source_type="document",
-                engine="markitdown",
-                file_name=os.path.basename(source_path),
-                file_path=os.path.abspath(source_path),
-                markdown_path=markdown_path,
-                downloader="markitdown",
-            )
-            log_info(
-                logger,
-                "MarkItDown donusturme tamamlandi",
-                stage="markitdown.convert",
-                file_path=source_path,
-                markdown_path=markdown_path,
-                text_length=len(markdown),
-            )
-            return _json_response(
-                {
-                    "status": "success",
-                    "engine": "markitdown",
-                    "file_path": os.path.abspath(source_path),
-                    "markdown_path": markdown_path,
-                    "text": markdown,
-                },
-                operation_id=operation_id,
-            )
-    except ValueError as exc:
-        with bind_operation(operation_id):
-            log_warning(logger, "MarkItDown istegi gecersiz", stage="markitdown.validation", error=str(exc))
-        return _json_response({"error": str(exc)}, status=400, operation_id=operation_id)
-    except Exception as exc:
-        with bind_operation(operation_id):
-            log_exception(logger, "MarkItDown donusturme basarisiz oldu", stage="markitdown.convert")
-        return _json_response({"error": f"Markdown donusturme hatasi: {str(exc)}"}, status=500, operation_id=operation_id)
 
 
 @app.route("/download_media", methods=["POST"])

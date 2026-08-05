@@ -326,6 +326,25 @@ def _move_item_file_to_uploader_dir(item, base_dir):
     return item
 
 
+def _find_existing_instagram_file(directory, target, shortcode, audio_only=False):
+    """Bu shortcode icin daha once indirilmis dosya varsa yolunu doner."""
+    if not shortcode or not os.path.isdir(directory):
+        return None
+
+    stem = f"{sanitize_filename(target)}_{shortcode}"
+    extensions = {".m4a"} if audio_only else VIDEO_EXTENSIONS
+    for filename in os.listdir(directory):
+        path = os.path.join(directory, filename)
+        if not os.path.isfile(path):
+            continue
+        file_stem, extension = os.path.splitext(filename)
+        if extension.lower() not in extensions:
+            continue
+        if file_stem == stem or file_stem.startswith(f"{stem} ("):
+            return os.path.abspath(path)
+    return None
+
+
 def _find_latest_video_file(directory, stem=None, ignore_paths=None):
     ignore_paths = ignore_paths or set()
     matches = []
@@ -776,6 +795,33 @@ def download_instagram_profile_reels(url, save_path="downloads", cookie_path=Non
             continue
 
         shortcode = getattr(post, "shortcode", None) or f"index-{index}"
+
+        existing_file = _find_existing_instagram_file(
+            account_dir, username, getattr(post, "shortcode", None), audio_only=audio_only
+        )
+        if existing_file:
+            log_info(
+                logger,
+                "Instagram reel zaten indirilmis, atlaniyor",
+                stage="instagram.profile",
+                username=username,
+                shortcode=shortcode,
+                file_path=existing_file,
+            )
+            item = _instagram_item_from_post(post, existing_file)
+            items.append(item)
+            if item_callback:
+                item_callback(
+                    item,
+                    platform="instagram",
+                    source_type="profile_reels",
+                    source_name=username,
+                    source_url=f"https://www.instagram.com/{username}/",
+                    download_dir=account_dir,
+                    downloader="instaloader",
+                )
+            continue
+
         try:
             video_path = _download_instaloader_post(loader, post, account_dir, sanitize_filename(username))
             if not video_path:

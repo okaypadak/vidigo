@@ -19,7 +19,6 @@ from utils.video_downloader import (
     resolve_cookie_file,
 )
 from utils.youtube_utils import extract_youtube_video_id
-from utils.markitdown_converter import convert_file_to_markdown, save_markdown_output, is_audio_or_video_file
 from transcribers.whisper_transcriber import transcribe_whisper
 
 mcp = FastMCP("vidigo")
@@ -61,32 +60,6 @@ def transcribe_url(url: str, language: str = "tr", model: str = "medium") -> str
     with _suppress_logs():
         transcript, _ = _transcribe_media_to_markdown(url, language=language, model=model, allowed_platforms={"youtube", "instagram"})
     return transcript
-
-
-@mcp.tool()
-def convert_document(file_path: str) -> str:
-    """PDF, Word, Excel veya PowerPoint dosyasını Markdown'a çevirir.
-
-    Args:
-        file_path: Dönüştürülecek dosyanın tam yolu (.pdf, .docx, .xlsx, .pptx vb.)
-
-    Returns:
-        Dosyanın Markdown formatındaki içeriği
-    """
-    if not file_path or not file_path.strip():
-        raise ValueError("Dosya yolu boş olamaz.")
-
-    abs_path = os.path.abspath(file_path.strip())
-    if not os.path.isfile(abs_path):
-        raise FileNotFoundError(f"Dosya bulunamadı: {abs_path}")
-
-    if is_audio_or_video_file(abs_path):
-        raise ValueError("Ses/video dosyaları için transcribe_youtube aracını kullanın.")
-
-    with _suppress_logs():
-        markdown = convert_file_to_markdown(abs_path)
-        save_markdown_output(abs_path, markdown, output_dir=TRANSCRIPT_DIR)
-    return markdown
 
 
 def _write_unique(path: str, content: str) -> str:
@@ -165,13 +138,6 @@ def _run_cli() -> int:
     parser = argparse.ArgumentParser(description="Vidigo MCP server ve CLI araclari.")
     subparsers = parser.add_subparsers(dest="command")
 
-    convert_parser = subparsers.add_parser(
-        "convert-document",
-        aliases=["convert_document"],
-        help="PDF, Word, Excel veya PowerPoint dosyasini Markdown'a cevirir.",
-    )
-    convert_parser.add_argument("file_path", help="Donusturulecek dosyanin yolu.")
-
     transcribe_parser = subparsers.add_parser(
         "transcribe-youtube",
         aliases=["transcribe_youtube"],
@@ -200,20 +166,6 @@ def _run_cli() -> int:
     url_parser.add_argument("--model", "-m", default="medium", help="Whisper modeli. Varsayilan: medium")
 
     args = parser.parse_args()
-    if args.command in {"convert-document", "convert_document"}:
-        file_path = os.path.abspath(args.file_path.strip())
-        if not os.path.isfile(file_path):
-            raise FileNotFoundError(f"Dosya bulunamadı: {file_path}")
-        if is_audio_or_video_file(file_path):
-            raise ValueError("Ses/video dosyaları için transcribe_url aracını kullanın.")
-
-        with _suppress_logs():
-            markdown = convert_file_to_markdown(file_path)
-            output_path = save_markdown_output(file_path, markdown, output_dir=TRANSCRIPT_DIR)
-        print(f"[OK] Markdown olusturuldu: {output_path}")
-        print(f"[OK] Karakter sayisi: {len(markdown)}")
-        return 0
-
     if args.command in {"transcribe-youtube", "transcribe_youtube"}:
         with _suppress_logs():
             transcript, output_path = _transcribe_media_to_markdown(
