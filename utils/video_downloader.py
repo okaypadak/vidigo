@@ -3,14 +3,16 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
-from datetime import datetime
+from datetime import datetime, timezone
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
+from urllib.request import HTTPCookieProcessor, Request, build_opener, urlopen
 
 import instaloader
 import yt_dlp
+from instaloader.nodeiterator import NodeIterator
 
 from utils.app_logging import log_exception, log_info, log_warning
 from utils.ffmpeg_utils import get_ffmpeg_binary, get_ffmpeg_dir
@@ -65,6 +67,13 @@ def strip_title_hashtags(title):
 _strip_title_hashtags = strip_title_hashtags
 
 
+def _youtube_js_runtime_options():
+    node_path = shutil.which("node")
+    if not node_path:
+        return {}
+    return {"js_runtimes": {"node": {"path": node_path}}}
+
+
 def extract_instagram_shortcode(url):
     parsed = _parse_url(url)
     if not parsed:
@@ -80,6 +89,63 @@ def extract_instagram_shortcode(url):
         return parts[1]
 
     return None
+
+
+def is_instagram_share_url(url):
+    parsed = _parse_url(url)
+    if not parsed:
+        return False
+
+    host = parsed.netloc.lower()
+    parts = [part for part in parsed.path.split("/") if part]
+    return "instagram.com" in host and len(parts) >= 2 and parts[0].lower() == "share"
+
+
+def _instagram_request(url):
+    return Request(
+        url,
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36"
+            ),
+            "Accept-Language": "en-US,en;q=0.9",
+        },
+    )
+
+
+def _resolve_instagram_shared_url(url, cookie_path=None):
+    if not is_instagram_share_url(url):
+        return url
+
+    cookie_jar = None
+    if cookie_path and os.path.isfile(cookie_path):
+        cookie_jar = http.cookiejar.MozillaCookieJar(cookie_path)
+        cookie_jar.load(ignore_discard=True, ignore_expires=True)
+
+    opener = build_opener(HTTPCookieProcessor(cookie_jar)) if cookie_jar else build_opener()
+    with opener.open(_instagram_request(url), timeout=20) as response:
+        return response.geturl() or url
+
+
+def resolve_instagram_shortcode(url, cookie_path=None):
+    shortcode = extract_instagram_shortcode(url)
+    if shortcode:
+        return shortcode
+
+    if not is_instagram_share_url(url):
+        return None
+
+    try:
+        resolved_url = _resolve_instagram_shared_url(url, cookie_path=cookie_path)
+    except Exception:
+        log_exception(logger, "Instagram paylasim linki cozumlenemedi", stage="instagram.resolve", url=url)
+        return None
+
+    shortcode = extract_instagram_shortcode(resolved_url)
+    if shortcode:
+        log_info(logger, "Instagram paylasim linki cozumlendi", stage="instagram.resolve", url=url, resolved_url=resolved_url, shortcode=shortcode)
+    return shortcode
 
 
 def _parse_url(url):
@@ -107,10 +173,16 @@ def extract_instagram_username(url):
 
     host = parsed.netloc.lower()
     parts = [part for part in parsed.path.split("/") if part]
-    if "instagram.com" not in host or len(parts) != 1:
+    if "instagram.com" not in host:
         return None
 
-    username = parts[0].strip()
+    if len(parts) == 1:
+        username = parts[0].strip()
+    elif len(parts) == 2 and parts[1].lower() == "reels":
+        username = parts[0].strip()
+    else:
+        return None
+
     if not username or username.lower() in INSTAGRAM_RESERVED_PATHS:
         return None
 
@@ -254,6 +326,25 @@ def _move_item_file_to_uploader_dir(item, base_dir):
     return item
 
 
+def _find_existing_instagram_file(directory, target, shortcode, audio_only=False):
+    """Bu shortcode icin daha once indirilmis dosya varsa yolunu doner."""
+    if not shortcode or not os.path.isdir(directory):
+        return None
+
+    stem = f"{sanitize_filename(target)}_{shortcode}"
+    extensions = {".m4a"} if audio_only else VIDEO_EXTENSIONS
+    for filename in os.listdir(directory):
+        path = os.path.join(directory, filename)
+        if not os.path.isfile(path):
+            continue
+        file_stem, extension = os.path.splitext(filename)
+        if extension.lower() not in extensions:
+            continue
+        if file_stem == stem or file_stem.startswith(f"{stem} ("):
+            return os.path.abspath(path)
+    return None
+
+
 def _find_latest_video_file(directory, stem=None, ignore_paths=None):
     ignore_paths = ignore_paths or set()
     matches = []
@@ -271,30 +362,63 @@ def _find_latest_video_file(directory, stem=None, ignore_paths=None):
     return max(matches, key=os.path.getmtime) if matches else None
 
 
+def _instagram_download_error_message(exc):
+    text = str(exc)
+    if "fbcdn.net" in text and ("Failed to establish a new connection" in text or "WinError 10051" in text):
+        return (
+            "Instaloader video dosyasini buldu ancak indirme baglantisini acamadi. "
+            "Instagram mp4 dosyasina bu makineden 443 baglantisi kurulamiyor."
+        )
+    if "graphql/query" in text:
+        return f"Instagram reels listesi alinamadi: {text}"
+    return text
+
+
 def _download_instaloader_post(loader, post, output_dir, target):
     existing_files = _iter_directory_files(output_dir)
-    log_info(
-        logger,
-        "Instaloader gonderi indirme basladi",
-        stage="instagram.download.post",
-        shortcode=post.shortcode,
-        target=target,
-        output_dir=output_dir,
-    )
+    shortcode = getattr(post, "shortcode", None) or "instagram"
+
+    expected_stem = f"{target}_{shortcode}"
+    video_urls = list(getattr(post, "video_urls", None) or [])
+    if video_urls:
+        mtime = getattr(post, "date_local", None) or datetime.now()
+        last_error = None
+        for attempt, video_url in enumerate(video_urls, start=1):
+            try:
+                loader.download_pic(
+                    filename=os.path.join(output_dir, expected_stem),
+                    url=video_url,
+                    mtime=mtime,
+                )
+                video_path = _find_latest_video_file(output_dir, stem=expected_stem, ignore_paths=existing_files) or _find_latest_video_file(
+                    output_dir,
+                    stem=expected_stem,
+                )
+                if video_path:
+                    log_info(
+                        logger,
+                        "Indirildi",
+                        stage="instagram.download.post",
+                        shortcode=shortcode,
+                        file_path=video_path,
+                    )
+                    return video_path
+            except Exception as exc:
+                last_error = exc
+                error_text = _instagram_download_error_message(exc)
+                continue
+
+        if last_error:
+            raise RuntimeError(_instagram_download_error_message(last_error))
+
     loader.download_post(post, target=target)
 
-    expected_stem = f"{target}_{post.shortcode}"
     video_path = _find_latest_video_file(output_dir, stem=expected_stem, ignore_paths=existing_files) or _find_latest_video_file(
         output_dir,
         stem=expected_stem,
     )
-    log_info(
-        logger,
-        "Instaloader gonderi indirme tamamlandi",
-        stage="instagram.download.post",
-        shortcode=post.shortcode,
-        file_path=video_path or "bulunamadi",
-    )
+    if video_path:
+        log_info(logger, "Indirildi", stage="instagram.download.post", shortcode=shortcode, file_path=video_path)
     return video_path
 
 
@@ -316,24 +440,21 @@ def _apply_instagram_cookiefile(loader, cookie_path):
     if csrf_token:
         loader.context._session.headers.update({"X-CSRFToken": csrf_token})
 
-    username = loader.test_login()
-    if not username:
+    if not cookie_map.get("sessionid"):
         raise ValueError(
-            "Instagram cookie dosyasi yuklendi ancak oturum dogrulanamadi. "
+            "Instagram cookie dosyasinda sessionid bulunamadi. "
             "~/cookie/instagram.txt dosyasini yenileyin."
         )
 
-    loader.context.username = username
     ds_user_id = cookie_map.get("ds_user_id")
     if ds_user_id and str(ds_user_id).isdigit():
         loader.context.user_id = int(ds_user_id)
 
     log_info(
         logger,
-        "Instagram cookie dosyasi oturuma yuklendi ve dogrulandi",
+        "Instagram cookie dosyasi oturuma yuklendi",
         stage="instagram.session",
         cookie_file=cookie_path,
-        username=username,
         user_id=loader.context.user_id or "yok",
     )
 
@@ -353,16 +474,18 @@ def _build_instaloader(output_dir, cookie_path=None):
         save_metadata=False,
         compress_json=False,
         post_metadata_txt_pattern="",
-        max_connection_attempts=3,
-        request_timeout=120.0,
+        max_connection_attempts=1,
+        request_timeout=30.0,
         sanitize_paths=True,
     )
+    loader.context.error = lambda *args, **kwargs: None
     _apply_instagram_cookiefile(loader, cookie_path)
     return loader
 
 
 def _instagram_item_from_post(post, file_path):
-    owner = sanitize_filename(getattr(post, "owner_username", None) or getattr(post.owner_profile, "username", "instagram"))
+    owner_profile = getattr(post, "owner_profile", None)
+    owner = sanitize_filename(getattr(post, "owner_username", None) or getattr(owner_profile, "username", "instagram"))
     caption = (getattr(post, "caption", None) or "").strip()
     return {
         "id": post.shortcode,
@@ -388,6 +511,95 @@ def _is_reel_candidate(post):
     if product_type:
         return product_type == "clips"
     return bool(getattr(post, "is_video", False))
+
+
+def _extract_instagram_reels_edges(data):
+    if not isinstance(data, dict):
+        raise RuntimeError("Instagram reels listesi alinamadi: GraphQL bos yanit dondu.")
+
+    connection = (data.get("data") or {}).get("xdt_api__v1__clips__user__connection_v2")
+    if not isinstance(connection, dict):
+        errors = data.get("errors") or []
+        if errors:
+            message = errors[0].get("message") if isinstance(errors[0], dict) else str(errors[0])
+            raise RuntimeError(f"Instagram reels listesi alinamadi: {message}")
+        raise RuntimeError("Instagram reels listesi alinamadi: GraphQL reels verisi bos dondu.")
+
+    return connection
+
+
+class InstagramReelListItem:
+    def __init__(self, media, username):
+        self._media = media or {}
+        self.shortcode = self._media.get("code") or self._media.get("shortcode") or self._media.get("pk")
+        self.owner_username = username
+        self.product_type = "clips"
+        self.is_video = self._media.get("media_type") == 2 or bool(self._media.get("video_versions"))
+        self.video_urls = self._extract_video_urls(self._media)
+        self.caption = self._extract_caption(self._media)
+        self.likes = self._media.get("like_count")
+        self.comments = self._media.get("comment_count")
+        self.date_utc = self._extract_date(self._media)
+
+    @property
+    def date_local(self):
+        if self.date_utc:
+            return self.date_utc.astimezone()
+        return datetime.now()
+
+    @staticmethod
+    def _extract_video_urls(media):
+        urls = []
+        for version in media.get("video_versions") or []:
+            url = version.get("url")
+            if url and url not in urls:
+                urls.append(url)
+        return urls
+
+    @staticmethod
+    def _extract_caption(media):
+        caption = media.get("caption")
+        if isinstance(caption, dict):
+            return caption.get("text") or ""
+        return caption or ""
+
+    @staticmethod
+    def _extract_date(media):
+        timestamp = media.get("taken_at") or media.get("taken_at_ts")
+        if not timestamp:
+            return None
+        try:
+            return datetime.fromtimestamp(int(timestamp), tz=timezone.utc).replace(tzinfo=None)
+        except (TypeError, ValueError, OSError):
+            return None
+
+
+def _instagram_reel_item_from_node(node, username):
+    media = (node or {}).get("media") or node or {}
+    return InstagramReelListItem(media, username)
+
+
+def _instagram_profile_reels_iterator(loader, profile, username):
+    user_id = getattr(profile, "userid", None)
+    if user_id:
+        return NodeIterator(
+            context=loader.context,
+            edge_extractor=_extract_instagram_reels_edges,
+            node_wrapper=lambda node: _instagram_reel_item_from_node(node, username),
+            query_variables={
+                "data": {
+                    "page_size": 12,
+                    "include_feed_video": True,
+                    "target_user_id": str(user_id),
+                }
+            },
+            query_referer=f"https://www.instagram.com/{username}/",
+            is_first=instaloader.Profile._make_is_newest_checker(),
+            doc_id="7845543455542541",
+            query_hash=None,
+        )
+
+    return profile.get_reels() if hasattr(profile, "get_reels") else profile.get_posts()
 
 
 def _extract_audio_to_m4a(video_path, audio_path):
@@ -495,7 +707,7 @@ class YtDlpMessageBridge:
 def download_instagram_video(url, save_path="downloads", cookie_path=None):
     abs_save_path = os.path.abspath(save_path)
     os.makedirs(abs_save_path, exist_ok=True)
-    shortcode = extract_instagram_shortcode(url)
+    shortcode = resolve_instagram_shortcode(url, cookie_path=cookie_path)
     if not shortcode:
         raise ValueError("Gecerli bir Instagram post veya reel URL girin.")
 
@@ -534,28 +746,47 @@ def download_instagram_profile_reels(url, save_path="downloads", cookie_path=Non
     except instaloader.exceptions.ProfileNotExistsException:
         _raise_instagram_profile_lookup_error(username, cookie_path)
 
-    posts = profile.get_reels() if hasattr(profile, "get_reels") else profile.get_posts()
     items = []
     errors = []
     index = 0
-    post_iterator = iter(posts)
+    try:
+        posts = _instagram_profile_reels_iterator(loader, profile, username)
+        post_iterator = iter(posts)
+    except Exception as exc:
+        error_text = _instagram_download_error_message(exc)
+        errors.append(
+            {
+                "stage": "iterate",
+                "error": error_text,
+            }
+        )
+        log_warning(
+            logger,
+            "Instagram reels listesi okunurken hata olustu",
+            stage="instagram.profile",
+            username=username,
+            error=error_text,
+        )
+        post_iterator = iter(())
     while True:
         try:
             post = next(post_iterator)
         except StopIteration:
             break
         except Exception as exc:
+            error_text = str(exc)
             errors.append(
                 {
                     "stage": "iterate",
-                    "error": str(exc),
+                    "error": error_text,
                 }
             )
-            log_exception(
+            log_warning(
                 logger,
                 "Instagram reels listesi okunurken hata olustu",
                 stage="instagram.profile",
                 username=username,
+                error=error_text,
             )
             break
 
@@ -564,17 +795,42 @@ def download_instagram_profile_reels(url, save_path="downloads", cookie_path=Non
             continue
 
         shortcode = getattr(post, "shortcode", None) or f"index-{index}"
-        try:
+
+        existing_file = _find_existing_instagram_file(
+            account_dir, username, getattr(post, "shortcode", None), audio_only=audio_only
+        )
+        if existing_file:
             log_info(
                 logger,
-                "Instagram profilindeki reel indiriliyor",
+                "Instagram reel zaten indirilmis, atlaniyor",
                 stage="instagram.profile",
                 username=username,
-                index=index,
                 shortcode=shortcode,
+                file_path=existing_file,
             )
+            item = _instagram_item_from_post(post, existing_file)
+            items.append(item)
+            if item_callback:
+                item_callback(
+                    item,
+                    platform="instagram",
+                    source_type="profile_reels",
+                    source_name=username,
+                    source_url=f"https://www.instagram.com/{username}/",
+                    download_dir=account_dir,
+                    downloader="instaloader",
+                )
+            continue
+
+        try:
             video_path = _download_instaloader_post(loader, post, account_dir, sanitize_filename(username))
             if not video_path:
+                error_text = "Instaloader video dosyasini indirmedi."
+                if not items:
+                    raise RuntimeError(
+                        "Instagram reel listesi alindi ancak hicbir video indirilemedi. "
+                        f"Ilk hata ({shortcode}): {error_text}"
+                    )
                 log_warning(
                     logger,
                     "Instagram reel indirme sonrasi dosya bulunamadi",
@@ -586,7 +842,7 @@ def download_instagram_profile_reels(url, save_path="downloads", cookie_path=Non
                     {
                         "shortcode": shortcode,
                         "stage": "download",
-                        "error": "Instaloader video dosyasini indirmedi.",
+                        "error": error_text,
                     }
                 )
                 continue
@@ -616,21 +872,28 @@ def download_instagram_profile_reels(url, save_path="downloads", cookie_path=Non
                     downloader="instaloader",
                 )
         except Exception as exc:
+            error_text = _instagram_download_error_message(exc)
             errors.append(
                 {
                     "shortcode": shortcode,
                     "stage": "item",
-                    "error": str(exc),
+                    "error": error_text,
                 }
             )
-            log_exception(
+            log_warning(
                 logger,
-                "Instagram profilindeki reel islenirken hata olustu",
+                "Instagram reel indirilemedi",
                 stage="instagram.profile",
                 username=username,
                 index=index,
                 shortcode=shortcode,
+                error=error_text,
             )
+            if not items:
+                raise RuntimeError(
+                    "Instagram reel listesi alindi ancak hicbir video indirilemedi. "
+                    f"Ilk hata ({shortcode}): {error_text}"
+                )
             continue
 
     log_info(
@@ -641,6 +904,19 @@ def download_instagram_profile_reels(url, save_path="downloads", cookie_path=Non
         item_count=len(items),
         failed_count=len(errors),
     )
+    if not items and errors:
+        first_error = errors[0]
+        shortcode = first_error.get("shortcode") or "bilinmiyor"
+        error_text = first_error.get("error") or "Bilinmeyen indirme hatasi."
+        raise RuntimeError(
+            "Instagram reel listesi alindi ancak hicbir video indirilemedi. "
+            f"Ilk hata ({shortcode}): {error_text}"
+        )
+    if not items:
+        raise FileNotFoundError(
+            "Instagram profilinde indirilebilir reel bulunamadi veya Instagram reels listesi bos dondu."
+        )
+
     result = {
         "platform": "instagram",
         "source_type": "profile_reels",
@@ -763,9 +1039,10 @@ def _build_ytdlp_video_options(abs_save_path, cookie_path=None, allow_playlist=F
         "postprocessor_hooks": [postprocessor_hook],
         "noplaylist": not allow_playlist,
         "extractor_args": {
-            "youtube": {"player_client": ["android", "ios", "web"]}
+            "youtube": {"player_client": ["web"]}
         },
     }
+    ydl_opts.update(_youtube_js_runtime_options())
 
     return ydl_opts, downloaded_files
 
@@ -843,9 +1120,10 @@ def _build_ytdlp_audio_playlist_options(abs_save_path, cookie_path=None, item_ca
         ],
         "noplaylist": False,
         "extractor_args": {
-            "youtube": {"player_client": ["android", "ios", "web"]}
+            "youtube": {"player_client": ["web"]}
         },
     }
+    ydl_opts.update(_youtube_js_runtime_options())
 
     return ydl_opts, downloaded_files
 
@@ -1057,9 +1335,25 @@ def list_youtube_video_urls(url, cookie_path=None):
         "ignoreerrors": True,
         "noplaylist": False,
         "extractor_args": {
-            "youtube": {"player_client": ["tv_embedded", "web"]}
+            "youtube": {"player_client": ["web"]}
         },
     }
+    ydl_opts.update(_youtube_js_runtime_options())
+
+    playlist_id = extract_youtube_playlist_id(url)
+    if playlist_id:
+        info = _fetch_youtube_tab(url, ydl_opts)
+        if not info:
+            return []
+
+        uploader = info.get("uploader") or info.get("channel")
+        if _is_valid_video_id(info.get("id")):
+            webpage_url = info.get("webpage_url") or f"https://www.youtube.com/watch?v={info['id']}"
+            return [{"url": webpage_url, "video_id": info["id"], "title": info.get("title"), "uploader": uploader}]
+
+        items = _flatten_entries(info.get("entries") or [], uploader_fallback=uploader)
+        log_info(logger, "YouTube playlist video listesi alindi", stage="youtube.list", url=url, playlist_id=playlist_id, item_count=len(items))
+        return items
 
     # Tek video URL'si mi?
     parsed = _parse_url(url)
@@ -1124,9 +1418,10 @@ def fetch_channel_catalog(url, cookie_path=None):
         "ignoreerrors": True,
         "noplaylist": False,
         "extractor_args": {
-            "youtube": {"player_client": ["tv_embedded", "web"]}
+            "youtube": {"player_client": ["web"]}
         },
     }
+    ydl_opts.update(_youtube_js_runtime_options())
 
     base_url = _channel_base_url(url)
     uploader = None
@@ -1232,8 +1527,9 @@ def download_audio_generic(url, save_path="downloads", codec="m4a", cookie_path=
 
     if is_youtube:
         ydl_opts["extractor_args"] = {
-            "youtube": {"player_client": ["android", "ios", "web"]}
+            "youtube": {"player_client": ["web"]}
         }
+        ydl_opts.update(_youtube_js_runtime_options())
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
@@ -1360,6 +1656,36 @@ def _youtube_transcript_item_from_info(entry, txt_path, source_url):
     }
 
 
+def _youtube_caption_language_candidates(info):
+    if not isinstance(info, dict):
+        return ["tr"]
+
+    captions = info.get("automatic_captions") or info.get("subtitles") or {}
+    languages = [language for language, variants in captions.items() if variants]
+    preferred = []
+    default_language = info.get("language")
+
+    if default_language:
+        original_variant = f"{default_language}-orig"
+        if original_variant in languages:
+            preferred.append(original_variant)
+        if default_language in languages:
+            preferred.append(default_language)
+
+    if "tr-orig" in languages:
+        preferred.append("tr-orig")
+    if "tr" in languages:
+        preferred.append("tr")
+
+    preferred.extend(languages)
+
+    result = []
+    for language in preferred or ["tr"]:
+        if language and language not in result:
+            result.append(language)
+    return result
+
+
 def download_youtube_transcript_ytdlp(url, save_path, cookie_path=None):
     abs_save_path = os.path.abspath(save_path)
     os.makedirs(abs_save_path, exist_ok=True)
@@ -1382,15 +1708,15 @@ def download_youtube_transcript_ytdlp(url, save_path, cookie_path=None):
         "writesubtitles": True,
         "writeautomaticsub": True,
         "subtitlesformat": "vtt",
-        "subtitleslangs": ["tr"],
         "paths": {"home": abs_save_path, "subtitle": abs_save_path},
         "outtmpl": "%(title)s [%(id)s].%(ext)s",
         "ignoreerrors": True,
         "noplaylist": False,
         "extractor_args": {
-            "youtube": {"player_client": ["android", "ios", "web"]}
+            "youtube": {"player_client": ["web"]}
         },
     }
+    opts.update(_youtube_js_runtime_options())
 
     log_info(
         logger,
@@ -1402,9 +1728,20 @@ def download_youtube_transcript_ytdlp(url, save_path, cookie_path=None):
     )
 
     with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=True)
+        metadata = ydl.extract_info(url, download=False)
 
-    new_vtt_files = _find_vtt_files(abs_save_path, existing_files=existing_vtt_files)
+    info = None
+    new_vtt_files = []
+    for language in _youtube_caption_language_candidates(metadata):
+        download_opts = dict(opts)
+        download_opts["subtitleslangs"] = [language]
+        with yt_dlp.YoutubeDL(download_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+
+        new_vtt_files = _find_vtt_files(abs_save_path, existing_files=existing_vtt_files)
+        if new_vtt_files:
+            break
+
     if not new_vtt_files:
         log_warning(logger, "yt-dlp altyazi dosyasi uretilmedi, atlaniyor", stage="youtube.transcript", url=url)
         return []

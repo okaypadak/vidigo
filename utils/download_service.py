@@ -12,6 +12,7 @@ from utils.video_downloader import (
     download_youtube_video,
     extract_instagram_shortcode,
     extract_instagram_username,
+    is_instagram_share_url,
     is_instagram_url,
     resolve_cookie_file,
     sanitize_filename,
@@ -45,7 +46,7 @@ def classify_download_url(url):
         raise ValueError("Gecerli bir YouTube video, playlist veya kanal URL'si girin.")
 
     if is_instagram_url(normalized):
-        if extract_instagram_shortcode(normalized):
+        if extract_instagram_shortcode(normalized) or is_instagram_share_url(normalized):
             return {"platform": "instagram", "source_type": "reel", "url": normalized}
         if extract_instagram_username(normalized):
             return {"platform": "instagram", "source_type": "profile_reels", "url": normalized}

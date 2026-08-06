@@ -39,7 +39,8 @@ _PROGRESS_LOCK = threading.Lock()
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.expanduser("~/")
-AUDIO_DIR = os.path.join(UPLOAD_DIR, "audiofiles")
+# Indirilen medya kullanicinin sabit Vidigo klasorunde tutulur.
+AUDIO_DIR = os.path.join(UPLOAD_DIR, "vidigo")
 DOWNLOAD_DIR = os.path.join(BASE_DIR, "downloads")
 LOG_DIR = os.path.join(UPLOAD_DIR, "vidigo_logs")
 LOG_PATH = os.path.join(LOG_DIR, "app.log")
@@ -48,6 +49,7 @@ os.makedirs(AUDIO_DIR, exist_ok=True)
 os.makedirs(LOG_DIR, exist_ok=True)
 
 configure_logging(LOG_PATH)
+logging.getLogger("werkzeug").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
@@ -345,6 +347,10 @@ def _process_audio_item(url, *, cookie_path=None, mode="download", source_type=N
     keep_audio_files = mode in {"download", "mp3_only"}
     request = classify_download_url(url)
     platform = request["platform"]
+    # Instagram transkriptleri icin cikarilan M4A, kullanicinin Vidigo klasorunde
+    # sonraki kullanimlar icin tutulur.
+    if platform == "instagram" and mode == "transcript_only":
+        keep_audio_files = True
     item_source_type = source_type or request["source_type"]
     item_source_url = source_url or url
     resolved_cookie = resolve_cookie_file(platform, cookie_path=cookie_path, cookie_dir=COOKIE_ROOT)
@@ -639,6 +645,7 @@ def _already_downloaded(video_id, mode):
 def _instagram_profile_payload(url, cookie_path=None, mode="download"):
     transcript_enabled = mode in {"download", "transcript_only"}
     keep_audio = mode in {"download", "mp3_only"}
+    audio_only = mode in {"mp3_only", "transcript_only"}
 
     resolved_cookie = resolve_cookie_file("instagram", cookie_path=cookie_path, cookie_dir=COOKIE_ROOT)
     username = extract_instagram_username(url)
@@ -650,7 +657,7 @@ def _instagram_profile_payload(url, cookie_path=None, mode="download"):
         url,
         save_path=account_save_dir,
         cookie_path=resolved_cookie,
-        audio_only=True,
+        audio_only=audio_only,
     )
     result["downloader"] = "instaloader"
 
@@ -772,7 +779,10 @@ def _single_audio_payload(url, cookie_path=None, mode="download", cancel_event=N
                 video_id = extract_youtube_video_id(item_url)
             else:
                 video_id = extract_instagram_shortcode(item_url)
-        if video_id and _already_downloaded(video_id, mode):
+        # Transkript istegi her seferinde medya dosyasini yeniden hazirlar. Eski bir
+        # TinyDB kaydi metin iceriyor olsa bile kullanicinin diskte bekledigi medya
+        # dosyasi kalmamis olabilir.
+        if video_id and mode != "transcript_only" and _already_downloaded(video_id, mode):
             log_info(logger, "Video zaten indirilmis, atlaniyor", stage="single.pipeline", index=index, total=len(source_items), video_id=video_id)
             skipped_count += 1
             _set_operation_progress(
@@ -1005,7 +1015,7 @@ def download_media_route():
 
     try:
         with bind_operation(operation_id):
-            log_info(logger, "Tekli indirme istegi alindi", stage="request.accepted", url=url, cookie_path=cookie_path or "auto")
+            log_info(logger, "URL indirme istegi alindi", stage="request.accepted", url=url, cookie_path=cookie_path or "auto")
             if mode not in {"download", "mp3_only", "transcript_only"}:
                 raise ValueError("Gecersiz mod. 'download', 'mp3_only' veya 'transcript_only' olmali.")
             payload = _single_audio_payload(url, cookie_path=cookie_path, mode=mode, cancel_event=cancel_event)
@@ -1014,7 +1024,7 @@ def download_media_route():
             cancelled = cancel_event.is_set()
             log_info(
                 logger,
-                "Tekli indirme istegi tamamlandi" if not cancelled else "Tekli indirme iptal edildi",
+                "URL indirme istegi tamamlandi" if not cancelled else "URL indirme iptal edildi",
                 stage="request.completed",
                 url=url,
                 item_count=payload.get("item_count", 0),
@@ -1029,7 +1039,7 @@ def download_media_route():
         return _json_response({"error": str(exc)}, status=400, operation_id=operation_id)
     except Exception as exc:
         with bind_operation(operation_id):
-            log_exception(logger, "Tekli indirme akisi basarisiz oldu", stage="request.failed", url=url)
+            log_exception(logger, "URL indirme akisi basarisiz oldu", stage="request.failed", url=url, error=str(exc))
         _set_operation_progress(operation_id, active=False, status="error", error=str(exc))
         return _json_response({"error": f"Indirme hatasi: {str(exc)}"}, status=500, operation_id=operation_id)
     finally:
