@@ -40,7 +40,8 @@ _PROGRESS_LOCK = threading.Lock()
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.expanduser("~/")
-AUDIO_DIR = os.path.join(UPLOAD_DIR, "audiofiles")
+# Indirilen medya kullanicinin sabit Vidigo klasorunde tutulur.
+AUDIO_DIR = os.path.join(UPLOAD_DIR, "vidigo")
 DOWNLOAD_DIR = os.path.join(BASE_DIR, "downloads")
 MARKITDOWN_UPLOAD_DIR = os.path.join(DOWNLOAD_DIR, "markitdown_uploads")
 LOG_DIR = os.path.join(UPLOAD_DIR, "vidigo_logs")
@@ -349,6 +350,10 @@ def _process_audio_item(url, *, cookie_path=None, mode="download", source_type=N
     keep_audio_files = mode in {"download", "mp3_only"}
     request = classify_download_url(url)
     platform = request["platform"]
+    # Instagram transkriptleri icin cikarilan M4A, kullanicinin Vidigo klasorunde
+    # sonraki kullanimlar icin tutulur.
+    if platform == "instagram" and mode == "transcript_only":
+        keep_audio_files = True
     item_source_type = source_type or request["source_type"]
     item_source_url = source_url or url
     resolved_cookie = resolve_cookie_file(platform, cookie_path=cookie_path, cookie_dir=COOKIE_ROOT)
@@ -777,7 +782,10 @@ def _single_audio_payload(url, cookie_path=None, mode="download", cancel_event=N
                 video_id = extract_youtube_video_id(item_url)
             else:
                 video_id = extract_instagram_shortcode(item_url)
-        if video_id and _already_downloaded(video_id, mode):
+        # Transkript istegi her seferinde medya dosyasini yeniden hazirlar. Eski bir
+        # TinyDB kaydi metin iceriyor olsa bile kullanicinin diskte bekledigi medya
+        # dosyasi kalmamis olabilir.
+        if video_id and mode != "transcript_only" and _already_downloaded(video_id, mode):
             log_info(logger, "Video zaten indirilmis, atlaniyor", stage="single.pipeline", index=index, total=len(source_items), video_id=video_id)
             skipped_count += 1
             _set_operation_progress(

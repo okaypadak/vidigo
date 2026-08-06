@@ -19,7 +19,10 @@ from utils.video_downloader import (
     resolve_cookie_file,
 )
 from utils.youtube_utils import extract_youtube_video_id
+<<<<<<< HEAD
 from utils.markitdown_converter import convert_file_to_markdown, save_markdown_output, is_audio_or_video_file
+=======
+>>>>>>> dd2d0e797d099be0142771dcb372e36d62398a1a
 from transcribers.whisper_transcriber import transcribe_whisper
 
 mcp = FastMCP("vidigo")
@@ -63,6 +66,7 @@ def transcribe_url(url: str, language: str = "tr", model: str = "medium") -> str
     return transcript
 
 
+<<<<<<< HEAD
 @mcp.tool()
 def convert_document(file_path: str) -> str:
     """PDF, Word, Excel veya PowerPoint dosyasını Markdown'a çevirir.
@@ -89,6 +93,8 @@ def convert_document(file_path: str) -> str:
     return markdown
 
 
+=======
+>>>>>>> dd2d0e797d099be0142771dcb372e36d62398a1a
 def _write_unique(path: str, content: str) -> str:
     if os.path.exists(path):
         base, ext = os.path.splitext(path)
@@ -165,6 +171,7 @@ def _run_cli() -> int:
     parser = argparse.ArgumentParser(description="Vidigo MCP server ve CLI araclari.")
     subparsers = parser.add_subparsers(dest="command")
 
+<<<<<<< HEAD
     convert_parser = subparsers.add_parser(
         "convert-document",
         aliases=["convert_document"],
@@ -172,6 +179,8 @@ def _run_cli() -> int:
     )
     convert_parser.add_argument("file_path", help="Donusturulecek dosyanin yolu.")
 
+=======
+>>>>>>> dd2d0e797d099be0142771dcb372e36d62398a1a
     transcribe_parser = subparsers.add_parser(
         "transcribe-youtube",
         aliases=["transcribe_youtube"],
@@ -200,6 +209,7 @@ def _run_cli() -> int:
     url_parser.add_argument("--model", "-m", default="medium", help="Whisper modeli. Varsayilan: medium")
 
     args = parser.parse_args()
+<<<<<<< HEAD
     if args.command in {"convert-document", "convert_document"}:
         file_path = os.path.abspath(args.file_path.strip())
         if not os.path.isfile(file_path):
@@ -214,6 +224,8 @@ def _run_cli() -> int:
         print(f"[OK] Karakter sayisi: {len(markdown)}")
         return 0
 
+=======
+>>>>>>> dd2d0e797d099be0142771dcb372e36d62398a1a
     if args.command in {"transcribe-youtube", "transcribe_youtube"}:
         with _suppress_logs():
             transcript, output_path = _transcribe_media_to_markdown(

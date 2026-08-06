@@ -101,3 +101,25 @@ def test_download_youtube_uses_existing_ytdlp_transcript_file_without_second_sav
     assert item["engine"] == "ytdlp_subtitle"
     assert item["transcript"] == "altyazi metni"
     assert persist_calls == []
+
+
+def test_transcript_only_instagram_keeps_audio_file(monkeypatch, tmp_path):
+    audio_path = tmp_path / "vidigo" / "creator" / "ses" / "Reel.m4a"
+    audio_path.parent.mkdir(parents=True)
+    audio_path.write_text("audio", encoding="utf-8")
+
+    _patch_common_persistence(monkeypatch)
+    monkeypatch.setattr(start_web, "classify_download_url", lambda url: {"platform": "instagram", "source_type": "reel", "url": url})
+    monkeypatch.setattr(start_web, "resolve_cookie_file", lambda *args, **kwargs: "cookie.txt")
+    monkeypatch.setattr(start_web, "_download_mp3", lambda *args, **kwargs: str(audio_path))
+    monkeypatch.setattr(start_web, "_transcribe_downloaded_audio", lambda *args, **kwargs: ("whisper", "reel metni", None))
+
+    item, _, _ = start_web._process_audio_item(
+        "https://www.instagram.com/reel/DbQO2p7Mos7/",
+        mode="transcript_only",
+    )
+
+    assert item["transcript"] == "reel metni"
+    assert item["file_path"] == str(audio_path)
+    assert "audio_removed" not in item
+    assert audio_path.exists()
