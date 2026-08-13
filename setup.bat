@@ -23,13 +23,23 @@ echo [OK] Python: %PYTHON%
 
 :: Bagimliliklar
 echo.
-echo [1/2] Bagimliliklar yukleniyor...
+echo [1/3] Bagimliliklar yukleniyor...
 "%PIP%" install -r "%PROJ_DIR%requirements.txt" --quiet
 echo [OK] Bagimliliklar hazir.
 
+:: Crawl4AI, Markdown cikarmak icin Playwright Chromium kullanir.
+echo.
+echo [2/3] Crawl4AI tarayicisi hazirlaniyor...
+"%PROJ_DIR%.venv312\Scripts\crawl4ai-setup.exe"
+if errorlevel 1 (
+    echo [HATA] Crawl4AI tarayicisi hazirlanamadi.
+    pause & exit /b 1
+)
+echo [OK] Crawl4AI tarayicisi hazir.
+
 :: Import testi
 echo.
-echo [2/2] MCP server test ediliyor...
+echo [3/3] MCP server test ediliyor...
 "%PYTHON%" -c "import sys; sys.path.insert(0, r'%PROJ_DIR%'); from mcp_server import mcp; print('[OK] Araclar:', ', '.join(t.name for t in mcp._tool_manager.list_tools()))"
 if errorlevel 1 (
     echo [HATA] MCP server yuklenemedi.

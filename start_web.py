@@ -22,6 +22,8 @@ from utils.app_logging import (
 from utils.download_service import COOKIE_ROOT, classify_download_url
 from utils.file_utils import load_download_history, save_download_record, save_output_transcript_to_file, save_transcript_to_file, upsert_download_record, upsert_manifest_item
 from utils.markitdown_converter import convert_file_to_markdown, save_markdown_output
+from utils.web_markdown import WebMarkdownUnavailableError, crawl_url_to_markdown, crawl_url_tree_to_markdown, save_web_markdown
+from utils.shutdown import install_sigint_exit_handler
 from utils.video_downloader import build_unique_filepath, download_audio_generic, download_instagram_profile_reels, download_youtube_transcript_ytdlp, extract_instagram_shortcode, extract_instagram_username, list_youtube_video_urls, resolve_cookie_file, sanitize_filename, save_channel_catalog, strip_title_hashtags
 from utils.youtube_utils import extract_youtube_channel_name, extract_youtube_video_id
 
@@ -44,11 +46,13 @@ UPLOAD_DIR = os.path.expanduser("~/")
 AUDIO_DIR = os.path.join(UPLOAD_DIR, "vidigo")
 DOWNLOAD_DIR = os.path.join(BASE_DIR, "downloads")
 MARKITDOWN_UPLOAD_DIR = os.path.join(DOWNLOAD_DIR, "markitdown_uploads")
+WEB_MARKDOWN_DIR = os.path.join(AUDIO_DIR, "web")
 LOG_DIR = os.path.join(UPLOAD_DIR, "vidigo_logs")
 LOG_PATH = os.path.join(LOG_DIR, "app.log")
 
 os.makedirs(AUDIO_DIR, exist_ok=True)
 os.makedirs(MARKITDOWN_UPLOAD_DIR, exist_ok=True)
+os.makedirs(WEB_MARKDOWN_DIR, exist_ok=True)
 os.makedirs(LOG_DIR, exist_ok=True)
 
 configure_logging(LOG_PATH)
@@ -1058,6 +1062,48 @@ def convert_file_to_markdown_route():
         return _json_response({"error": f"Markdown donusturme hatasi: {str(exc)}"}, status=500, operation_id=operation_id)
 
 
+@app.route("/crawl_url_to_markdown", methods=["POST"])
+def crawl_url_to_markdown_route():
+    operation_id = _operation_id_from_request()
+    data = request.get_json(silent=True) or {}
+    url = (data.get("url") or "").strip()
+    include_children = bool(data.get("include_children"))
+    if not url:
+        return _json_response({"error": "Taranacak URL gerekli."}, status=400, operation_id=operation_id)
+
+    try:
+        with bind_operation(operation_id):
+            log_info(logger, "Web sayfasi Markdown istegi alindi", stage="crawl4ai.crawl", url=url)
+            if include_children:
+                markdown, page_count = crawl_url_tree_to_markdown(url)
+            else:
+                markdown = crawl_url_to_markdown(url)
+                page_count = 1
+            markdown_path = save_web_markdown(url, markdown, WEB_MARKDOWN_DIR)
+            save_download_record(
+                video_name=os.path.splitext(os.path.basename(markdown_path))[0],
+                transcript=markdown,
+                platform="web",
+                source_type="web_page",
+                engine="crawl4ai",
+                file_name=os.path.basename(markdown_path),
+                file_path=markdown_path,
+                markdown_path=markdown_path,
+                downloader="crawl4ai",
+                url=url,
+            )
+            log_info(logger, "Web sayfasi Markdown olarak kaydedildi", stage="crawl4ai.crawl", url=url, markdown_path=markdown_path)
+            return _json_response({"status": "success", "engine": "crawl4ai", "url": url, "markdown_path": markdown_path, "page_count": page_count, "text": markdown}, operation_id=operation_id)
+    except (ValueError, WebMarkdownUnavailableError) as exc:
+        with bind_operation(operation_id):
+            log_warning(logger, "Web sayfasi Markdown istegi gecersiz", stage="crawl4ai.validation", url=url, error=str(exc))
+        return _json_response({"error": str(exc)}, status=400, operation_id=operation_id)
+    except Exception as exc:
+        with bind_operation(operation_id):
+            log_exception(logger, "Web sayfasi Markdown donusumu basarisiz", stage="crawl4ai.crawl", url=url)
+        return _json_response({"error": f"Web sayfasi tarama hatasi: {str(exc)}"}, status=502, operation_id=operation_id)
+
+
 @app.route("/download_media", methods=["POST"])
 def download_media_route():
     operation_id = _operation_id_from_request()
@@ -1259,15 +1305,18 @@ def batch_transcribe():
 
 
 if __name__ == "__main__":
+    install_sigint_exit_handler()
     debug_enabled = os.environ.get("VIDIGO_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
+    host = os.environ.get("VIDIGO_HOST", "127.0.0.1")
+    port = int(os.environ.get("VIDIGO_PORT", "5000"))
     log_info(
         logger,
         "Flask sunucusu baslatiliyor",
         stage="startup",
-        host="127.0.0.1",
-        port=5000,
+        host=host,
+        port=port,
         debug=debug_enabled,
     )
-    app.run(host="127.0.0.1", port=5000, debug=debug_enabled)
+    app.run(host=host, port=port, debug=debug_enabled)
 
 

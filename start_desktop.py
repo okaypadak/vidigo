@@ -3,6 +3,7 @@ import requests
 from PyQt5.QtWidgets import QApplication, QWidget
 
 from templates.form_ui import Ui_Form
+from utils.shutdown import install_sigint_exit_handler
 
 
 class TranscriberApp(QWidget):
@@ -55,6 +56,7 @@ class TranscriberApp(QWidget):
 
 
 if __name__ == "__main__":
+    install_sigint_exit_handler()
     app = QApplication(sys.argv)
     window = TranscriberApp()
     window.show()

@@ -795,8 +795,6 @@ def download_instagram_profile_reels(url, save_path="downloads", cookie_path=Non
             continue
 
         shortcode = getattr(post, "shortcode", None) or f"index-{index}"
-<<<<<<< HEAD
-=======
 
         existing_file = _find_existing_instagram_file(
             account_dir, username, getattr(post, "shortcode", None), audio_only=audio_only
@@ -824,7 +822,6 @@ def download_instagram_profile_reels(url, save_path="downloads", cookie_path=Non
                 )
             continue
 
->>>>>>> dd2d0e797d099be0142771dcb372e36d62398a1a
         try:
             video_path = _download_instaloader_post(loader, post, account_dir, sanitize_filename(username))
             if not video_path:
@@ -1716,7 +1713,9 @@ def download_youtube_transcript_ytdlp(url, save_path, cookie_path=None):
         "ignoreerrors": True,
         "noplaylist": False,
         "extractor_args": {
-            "youtube": {"player_client": ["web"]}
+            # The web client can return an image-only manifest for captions on
+            # some videos. Android reliably exposes the automatic-caption URLs.
+            "youtube": {"player_client": ["android"]}
         },
     }
     opts.update(_youtube_js_runtime_options())

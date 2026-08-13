@@ -232,6 +232,31 @@
       background: rgba(255, 255, 255, 0.02);
     }
 
+    .markdown-option {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      margin-top: 16px;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      background: rgba(72, 243, 255, 0.035);
+      color: var(--text);
+      cursor: pointer;
+    }
+
+    .markdown-option input { margin: 3px 0 0; accent-color: var(--cyan); }
+    .markdown-option strong { display: block; font-size: 0.9rem; }
+    .markdown-option small { display: block; margin-top: 3px; color: var(--muted); line-height: 1.45; }
+
+    .child-pages-option {
+      display: none;
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 0.83rem;
+    }
+
+    .child-pages-option.show { display: block; }
+
     .actions {
       display: flex;
       flex-wrap: wrap;
@@ -483,7 +508,6 @@
 
     <div class="nav">
       <button type="button" onclick="document.getElementById('singlePanel').scrollIntoView({ behavior: 'smooth' })">Tek URL</button>
-      <button type="button" onclick="document.getElementById('outputPanel').scrollIntoView({ behavior: 'smooth' })">Cikti</button>
       <a href="/history_page">Gecmis</a>
       <div class="status">
         <div class="dot" id="gpuDot"></div>
@@ -493,20 +517,27 @@
 
     <div class="panel-grid">
       <section class="panel" id="singlePanel">
-        <div class="eyebrow"><span>01</span> Tek URL Indir</div>
-        <label class="label" for="videoUrl">YouTube veya Instagram URL</label>
-        <input type="text" id="videoUrl" placeholder="ornek: https://www.youtube.com/@kanaladi/videos veya https://www.youtube.com/playlist?list=..." />
+        <div class="eyebrow"><span>01</span> URL Indir</div>
+        <label class="label" for="videoUrl">YouTube, Instagram veya web sayfasi URL</label>
+        <input type="text" id="videoUrl" placeholder="ornek: https://developers.facebook.com/documentation/..." />
         <div class="badge-row">
           <div class="badge">YouTube video</div>
           <div class="badge">YouTube playlist</div>
           <div class="badge">YouTube channel</div>
           <div class="badge">Instagram reel</div>
           <div class="badge">Instagram hesap</div>
+          <div class="badge">Web dokumantasyonu</div>
         </div>
+        <label class="markdown-option">
+          <input type="checkbox" id="webMarkdownMode" onchange="toggleWebMarkdownMode()" />
+          <span><strong>Siteyi Markdown olarak indir</strong><small>Menu ve link kalabaligi olmadan ana icerigi Markdown'a cevirir.</small></span>
+        </label>
+        <label class="child-pages-option" id="childPagesOption"><input type="checkbox" id="includeChildPages" checked /> Alt sayfalari da tek dosyada birlestir</label>
         <div class="actions" id="downloadActions">
           <button class="btn btn-secondary" id="btnTranscript" type="button" onclick="downloadSingle('transcript_only')">Sadece Transkript</button>
           <button class="btn btn-ghost" id="btnMp3" type="button" onclick="downloadSingle('mp3_only')">Sadece MP3</button>
           <button class="btn btn-primary" id="btnDownload" type="button" onclick="downloadSingle('download')">Indir</button>
+          <button class="btn btn-primary" id="btnWebMarkdown" type="button" onclick="downloadWebMarkdown()" style="display:none">Markdown Indir</button>
           <button class="btn btn-danger" id="btnStop" type="button" onclick="cancelDownload()" style="display:none">Durdur</button>
         </div>
         <div class="hint">
@@ -526,13 +557,8 @@
 
     </div>
 
-    <section class="panel-wide" id="outputPanel">
-      <div class="eyebrow"><span>02</span> Cikti</div>
-      <textarea id="result" placeholder="> indirme ozeti ve manifest detaylari burada gorunecek"></textarea>
-    </section>
-
     <section class="panel-wide" id="logPanel">
-      <div class="eyebrow"><span>03</span> Canli Log</div>
+      <div class="eyebrow"><span>02</span> Canli Log</div>
       <div class="log-meta">
         <div class="log-state">
           <div class="dot" id="logDot"></div>
@@ -554,7 +580,7 @@
     let progressPollTimer = null;
 
     function setDownloadBusy(busy) {
-      const ids = ["btnTranscript", "btnMp3", "btnDownload"];
+      const ids = ["btnTranscript", "btnMp3", "btnDownload", "btnWebMarkdown"];
       ids.forEach(id => {
         const el = document.getElementById(id);
         if (el) el.disabled = busy;
@@ -600,6 +626,15 @@
       toast.className = "toast show" + (type ? " " + type : "");
       clearTimeout(toastTimer);
       toastTimer = setTimeout(() => toast.classList.remove("show"), 3200);
+    }
+
+    function toggleWebMarkdownMode() {
+      const enabled = document.getElementById("webMarkdownMode").checked;
+      document.getElementById("childPagesOption").classList.toggle("show", enabled);
+      document.getElementById("btnWebMarkdown").style.display = enabled ? "inline-flex" : "none";
+      ["btnTranscript", "btnMp3", "btnDownload"].forEach(id => {
+        document.getElementById(id).style.display = enabled ? "none" : "inline-flex";
+      });
     }
 
     function resetProgress() {
@@ -672,7 +707,7 @@
     }
 
     function setResult(data) {
-      document.getElementById("result").value = typeof data === "string" ? data : JSON.stringify(data, null, 2);
+      // Cikti paneli kaldirildi; islem detaylari canli logda gorunur.
     }
 
     function transcriptTextFromResponse(data) {
@@ -808,10 +843,38 @@
       }
     }
 
-    function copyResult() {
-      const value = document.getElementById("result").value;
-      if (!value) return;
-      navigator.clipboard.writeText(value).then(() => showToast("Cikti kopyalandi", "ok"));
+    async function downloadWebMarkdown() {
+      const url = document.getElementById("videoUrl").value.trim();
+      const includeChildren = document.getElementById("includeChildPages").checked;
+      if (!url) {
+        showToast("Web URL gerekli", "err");
+        return;
+      }
+
+      const button = document.getElementById("btnWebMarkdown");
+      const operationId = createOperationId();
+      button.disabled = true;
+      setResult("");
+      startLiveLog(operationId);
+      showToast(includeChildren ? "Dokumantasyon taraniyor" : "Web sayfasi taraniyor");
+      try {
+        const res = await fetch("/crawl_url_to_markdown", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Operation-Id": operationId },
+          body: JSON.stringify({ url, include_children: includeChildren })
+        });
+        const data = await res.json();
+        if (!res.ok || data.error) throw new Error(data.error || "Web sayfasi taranamadi");
+        setResult(data.text || "Markdown icerigi bulunamadi");
+        showToast(`Markdown kaydedildi: ${data.page_count || 1} sayfa`, "ok");
+        finishLiveLog("ISLEM BITTI");
+      } catch (error) {
+        setResult({ error: error.message || "Web sayfasi taranamadi" });
+        showToast(error.message || "Web sayfasi taranamadi", "err");
+        finishLiveLog("ISLEM HATA ILE BITTI");
+      } finally {
+        button.disabled = false;
+      }
     }
 
     checkGpuStatus();

@@ -5,6 +5,7 @@ import sys
 import argparse
 import contextlib
 import logging
+import asyncio
 
 # Proje kökünü path'e ekle
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -19,16 +20,37 @@ from utils.video_downloader import (
     resolve_cookie_file,
 )
 from utils.youtube_utils import extract_youtube_video_id
-<<<<<<< HEAD
-from utils.markitdown_converter import convert_file_to_markdown, save_markdown_output, is_audio_or_video_file
-=======
->>>>>>> dd2d0e797d099be0142771dcb372e36d62398a1a
 from transcribers.whisper_transcriber import transcribe_whisper
+from utils.shutdown import install_sigint_exit_handler
 
-mcp = FastMCP("vidigo")
+mcp = FastMCP(
+    "vidigo",
+    host=os.environ.get("VIDIGO_MCP_HOST", "127.0.0.1"),
+    port=int(os.environ.get("VIDIGO_MCP_PORT", "8000")),
+    streamable_http_path="/vidigo/mcp",
+)
 
-DOWNLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "downloads", "mcp_temp")
-TRANSCRIPT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "transcripts", "mcp")
+
+def _ignore_expected_windows_connection_reset(
+    loop: asyncio.AbstractEventLoop,
+    context: dict,
+) -> None:
+    """Windows'ta istemci kapatılan HTTP soketleri için gereksiz traceback'i gizle."""
+    exception = context.get("exception")
+    if isinstance(exception, ConnectionResetError) and getattr(exception, "winerror", None) == 10054:
+        return
+
+    loop.default_exception_handler(context)
+
+
+async def _run_streamable_http() -> None:
+    """HTTP MCP sunucusunu, beklenen istemci bağlantı kapanışlarını sessizce çalıştır."""
+    asyncio.get_running_loop().set_exception_handler(_ignore_expected_windows_connection_reset)
+    await mcp.run_streamable_http_async()
+
+MEDIA_ROOT = os.path.join(os.path.expanduser("~"), "vidigo")
+DOWNLOAD_DIR = os.path.join(MEDIA_ROOT, "mcp_temp")
+TRANSCRIPT_DIR = os.path.join(MEDIA_ROOT, "transcript", "mcp")
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 os.makedirs(TRANSCRIPT_DIR, exist_ok=True)
 
@@ -66,35 +88,6 @@ def transcribe_url(url: str, language: str = "tr", model: str = "medium") -> str
     return transcript
 
 
-<<<<<<< HEAD
-@mcp.tool()
-def convert_document(file_path: str) -> str:
-    """PDF, Word, Excel veya PowerPoint dosyasını Markdown'a çevirir.
-
-    Args:
-        file_path: Dönüştürülecek dosyanın tam yolu (.pdf, .docx, .xlsx, .pptx vb.)
-
-    Returns:
-        Dosyanın Markdown formatındaki içeriği
-    """
-    if not file_path or not file_path.strip():
-        raise ValueError("Dosya yolu boş olamaz.")
-
-    abs_path = os.path.abspath(file_path.strip())
-    if not os.path.isfile(abs_path):
-        raise FileNotFoundError(f"Dosya bulunamadı: {abs_path}")
-
-    if is_audio_or_video_file(abs_path):
-        raise ValueError("Ses/video dosyaları için transcribe_youtube aracını kullanın.")
-
-    with _suppress_logs():
-        markdown = convert_file_to_markdown(abs_path)
-        save_markdown_output(abs_path, markdown, output_dir=TRANSCRIPT_DIR)
-    return markdown
-
-
-=======
->>>>>>> dd2d0e797d099be0142771dcb372e36d62398a1a
 def _write_unique(path: str, content: str) -> str:
     if os.path.exists(path):
         base, ext = os.path.splitext(path)
@@ -171,16 +164,11 @@ def _run_cli() -> int:
     parser = argparse.ArgumentParser(description="Vidigo MCP server ve CLI araclari.")
     subparsers = parser.add_subparsers(dest="command")
 
-<<<<<<< HEAD
-    convert_parser = subparsers.add_parser(
-        "convert-document",
-        aliases=["convert_document"],
-        help="PDF, Word, Excel veya PowerPoint dosyasini Markdown'a cevirir.",
+    subparsers.add_parser(
+        "serve",
+        help="ChatGPT gibi uzaktaki MCP istemcileri icin Streamable HTTP sunucusunu baslatir.",
     )
-    convert_parser.add_argument("file_path", help="Donusturulecek dosyanin yolu.")
 
-=======
->>>>>>> dd2d0e797d099be0142771dcb372e36d62398a1a
     transcribe_parser = subparsers.add_parser(
         "transcribe-youtube",
         aliases=["transcribe_youtube"],
@@ -209,23 +197,10 @@ def _run_cli() -> int:
     url_parser.add_argument("--model", "-m", default="medium", help="Whisper modeli. Varsayilan: medium")
 
     args = parser.parse_args()
-<<<<<<< HEAD
-    if args.command in {"convert-document", "convert_document"}:
-        file_path = os.path.abspath(args.file_path.strip())
-        if not os.path.isfile(file_path):
-            raise FileNotFoundError(f"Dosya bulunamadı: {file_path}")
-        if is_audio_or_video_file(file_path):
-            raise ValueError("Ses/video dosyaları için transcribe_url aracını kullanın.")
-
-        with _suppress_logs():
-            markdown = convert_file_to_markdown(file_path)
-            output_path = save_markdown_output(file_path, markdown, output_dir=TRANSCRIPT_DIR)
-        print(f"[OK] Markdown olusturuldu: {output_path}")
-        print(f"[OK] Karakter sayisi: {len(markdown)}")
+    if args.command == "serve":
+        asyncio.run(_run_streamable_http())
         return 0
 
-=======
->>>>>>> dd2d0e797d099be0142771dcb372e36d62398a1a
     if args.command in {"transcribe-youtube", "transcribe_youtube"}:
         with _suppress_logs():
             transcript, output_path = _transcribe_media_to_markdown(
@@ -267,6 +242,7 @@ def _run_cli() -> int:
 
 
 if __name__ == "__main__":
+    install_sigint_exit_handler()
     if len(sys.argv) > 1:
         raise SystemExit(_run_cli())
     mcp.run(transport="stdio")
