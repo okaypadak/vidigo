@@ -4,9 +4,9 @@ import os
 import re
 import socket
 from datetime import datetime
-from urllib.parse import quote, unquote, urljoin, urlparse
-from urllib.request import Request, urlopen
-import unicodedata
+from urllib.parse import urlparse
+
+from utils.web_crawl_adapters import fetch_access_plan, resolve_site_adapter
 
 
 class WebMarkdownUnavailableError(RuntimeError):
@@ -100,90 +100,26 @@ def _markdown_from_result(result):
     ).strip())
 
 
-def _normalized_path(url):
-    return unicodedata.normalize("NFC", unquote(urlparse(url).path)).rstrip("/") or "/"
-
-
-def _sidebar_group_urls(html, current_url):
-    """ReadMe tabanli dokumanlarda aktif sol-menu grubunun sayfalarini bulur."""
-    try:
-        from bs4 import BeautifulSoup
-    except ImportError:
-        return []
-
-    soup = BeautifulSoup(html or "", "html.parser")
-    current_path = _normalized_path(current_url)
-    active_link = next(
-        (
-            anchor for anchor in soup.find_all("a", href=True)
-            if _normalized_path(urljoin(current_url, anchor["href"])) == current_path
-            and "active" in (anchor.get("class") or [])
-        ),
-        None,
-    )
-    if active_link is None:
-        return []
-
-    group = active_link.find_parent("ul", class_=lambda value: value and "subpages" in value)
-    if group is None:
-        return []
-
-    urls = []
-    seen = set()
-    current_host = urlparse(current_url).netloc.lower()
-    for anchor in group.find_all("a", href=True):
-        candidate = urljoin(current_url, anchor["href"]).split("#", 1)[0]
-        parsed = urlparse(candidate)
-        if parsed.scheme not in {"http", "https"} or parsed.netloc.lower() != current_host:
-            continue
-        key = candidate.rstrip("/")
-        if key not in seen:
-            seen.add(key)
-            urls.append(candidate)
-    return urls
-
-
-def _fetch_native_markdown(url):
-    markdown_url = quote(f"{url.rstrip('/')}.md", safe=":/?&=%")
-    request = Request(markdown_url, headers={"User-Agent": "Vidigo Markdown Downloader/1.0"})
-    try:
-        with urlopen(request, timeout=30) as response:
-            content_type = (response.headers.get("Content-Type") or "").lower()
-            content = response.read().decode("utf-8", errors="replace")
-    except Exception:
-        return ""
-    if "markdown" not in content_type and not content.lstrip().startswith(("#", "---")):
-        return ""
-    # ReadMe tabanli sitelerin metadata ve yönlendirme satırlarını dosyaya alma.
-    content = re.sub(r"\A---\s*\n.*?\n---\s*\n", "", content, flags=re.DOTALL)
-    content = re.sub(r"^Fetch the complete documentation index at:.*$", "", content, flags=re.MULTILINE)
-    return simplify_markdown(content)
-
-
-async def _fetch_native_markdown_pages(urls):
-    semaphore = asyncio.Semaphore(6)
-
-    async def fetch(url):
-        async with semaphore:
-            return await asyncio.to_thread(_fetch_native_markdown, url)
-
-    return [page for page in await asyncio.gather(*(fetch(url) for url in urls)) if page]
-
-
 async def _crawl(url, include_children=False):
     AsyncWebCrawler, BrowserConfig, *_ = _load_crawler()
+    adapter = resolve_site_adapter(url)
+    if adapter and adapter.requires_interactive_collection:
+        pages = await adapter.collect_interactively(url, include_children)
+        pages = [simplify_markdown(page) for page in pages if page]
+        if not pages:
+            raise RuntimeError(f"{adapter.name} dokuman icerigi alinamadi.")
+        return "\n\n---\n\n".join(pages), len(pages)
+
     browser_config = BrowserConfig(headless=True)
     async with AsyncWebCrawler(config=browser_config) as crawler:
         first_result = await crawler.arun(
             url=url,
             config=_navigation_discovery_config() if include_children else _crawler_run_config(url),
         )
-        sidebar_urls = _sidebar_group_urls(getattr(first_result, "html", ""), url) if include_children else []
-        if len(sidebar_urls) > 1:
-            # Birçok ReadMe dokümanı (Trendyol gibi) kategoriyi URL hiyerarşisi yerine
-            # sol menüde tanımlar. O kategoriye ait bütün sayfaları birlikte indir.
-            native_pages = await _fetch_native_markdown_pages(sidebar_urls)
-            result = native_pages or await crawler.arun_many(sidebar_urls, config=_crawler_run_config(url))
+        access_plan = adapter.discover(url, getattr(first_result, "html", ""), include_children) if adapter else None
+        if access_plan:
+            native_pages = await fetch_access_plan(access_plan)
+            result = native_pages or await crawler.arun_many(access_plan.urls, config=_crawler_run_config(url))
         elif include_children:
             result = await crawler.arun(url=url, config=_crawler_run_config(url, include_children=True))
         else:

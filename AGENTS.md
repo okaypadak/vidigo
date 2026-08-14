@@ -23,3 +23,9 @@
 - Whisper varsayılan dili Türkçe, varsayılan modeli `medium`dür; M4A doğrudan Whisper'a verilir, WAV ara dosyası oluşturulmaz.
 - İndirilen medya kökü `C:\Users\<kullanıcı>\vidigo` olmalıdır; proje köküne veya geçici klasöre medya bırakılmaz.
 - Transkript, manifest ve TinyDB kaydı ancak işlem sonucunu doğru yansıtacak şekilde yazılır. Başarısız işlem başarıyla indirilmiş gibi işaretlenmez.
+
+## Web Markdown adapter'ları
+
+- `TrendyolDocumentationAdapter` (`trendyol_documentation`)
+- `IdeasoftStoplightAdapter` (`ideasoft_stoplight`)
+- `HepsiburadaPortalAdapter` (`hepsiburada_portal`)
