@@ -89,6 +89,16 @@ def _navigation_discovery_config():
     return CrawlerRunConfig(cache_mode=CacheMode.BYPASS)
 
 
+def _report_progress(progress_callback, event, **fields):
+    """İlerleme bildiriminin taramayı kesmesine izin vermez."""
+    if progress_callback is None:
+        return
+    try:
+        progress_callback(event, **fields)
+    except Exception:
+        pass
+
+
 def _markdown_from_result(result):
     if not getattr(result, "success", False):
         return ""
@@ -100,11 +110,14 @@ def _markdown_from_result(result):
     ).strip())
 
 
-async def _crawl(url, include_children=False):
+async def _crawl(url, include_children=False, progress_callback=None):
     AsyncWebCrawler, BrowserConfig, *_ = _load_crawler()
     adapter = resolve_site_adapter(url)
     if adapter and adapter.requires_interactive_collection:
-        pages = await adapter.collect_interactively(url, include_children)
+        _report_progress(progress_callback, "crawl_started", url=url, include_children=include_children)
+        pages = await adapter.collect_interactively(
+            url, include_children, progress_callback=progress_callback
+        )
         pages = [simplify_markdown(page) for page in pages if page]
         if not pages:
             raise RuntimeError(f"{adapter.name} dokuman icerigi alinamadi.")
@@ -118,11 +131,38 @@ async def _crawl(url, include_children=False):
         )
         access_plan = adapter.discover(url, getattr(first_result, "html", ""), include_children) if adapter else None
         if access_plan:
-            native_pages = await fetch_access_plan(access_plan)
-            result = native_pages or await crawler.arun_many(access_plan.urls, config=_crawler_run_config(url))
+            _report_progress(
+                progress_callback,
+                "crawl_plan_ready",
+                total_pages=len(access_plan.urls),
+                source=access_plan.name,
+            )
+            native_pages = await fetch_access_plan(access_plan, progress_callback=progress_callback)
+            if native_pages:
+                result = native_pages
+            else:
+                result = []
+                for index, page_url in enumerate(access_plan.urls, start=1):
+                    _report_progress(
+                        progress_callback,
+                        "page_started",
+                        current_page=index,
+                        total_pages=len(access_plan.urls),
+                        url=page_url,
+                    )
+                    result.append(await crawler.arun(url=page_url, config=_crawler_run_config(url)))
+                    _report_progress(
+                        progress_callback,
+                        "page_finished",
+                        current_page=index,
+                        total_pages=len(access_plan.urls),
+                        url=page_url,
+                    )
         elif include_children:
+            _report_progress(progress_callback, "crawl_started", url=url, include_children=True, total_pages="bilinmiyor")
             result = await crawler.arun(url=url, config=_crawler_run_config(url, include_children=True))
         else:
+            _report_progress(progress_callback, "crawl_started", url=url, include_children=False, total_pages=1)
             result = first_result
 
     results = result if isinstance(result, list) else [result]
@@ -175,13 +215,13 @@ def simplify_markdown(markdown):
     return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
 
 
-def crawl_url_to_markdown(url):
-    markdown, _ = _run_async(_crawl(validate_web_url(url)))
+def crawl_url_to_markdown(url, progress_callback=None):
+    markdown, _ = _run_async(_crawl(validate_web_url(url), progress_callback=progress_callback))
     return markdown
 
 
-def crawl_url_tree_to_markdown(url):
-    return _run_async(_crawl(validate_web_url(url), include_children=True))
+def crawl_url_tree_to_markdown(url, progress_callback=None):
+    return _run_async(_crawl(validate_web_url(url), include_children=True, progress_callback=progress_callback))
 
 
 def _run_async(coroutine):

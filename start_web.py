@@ -1074,11 +1074,61 @@ def crawl_url_to_markdown_route():
     try:
         with bind_operation(operation_id):
             log_info(logger, "Web sayfasi Markdown istegi alindi", stage="crawl4ai.crawl", url=url)
+            crawl_stats = {
+                "total_pages": 0,
+                "scanned_pages": 0,
+                "saved_pages": 0,
+                "skipped_pages": 0,
+            }
+
+            def crawl_progress(event, **fields):
+                messages = {
+                    "crawl_started": "Web taramasi basladi",
+                    "crawl_menu_expanded": "Sol menu dallari acildi",
+                    "crawl_plan_ready": "Tarama listesi hazir",
+                    "page_started": "Sayfa taraniyor",
+                    "page_finished": "Sayfa tarandi",
+                }
+                if event == "crawl_plan_ready":
+                    total_pages = fields.get("total_pages")
+                    if isinstance(total_pages, int):
+                        crawl_stats["total_pages"] = total_pages
+                elif event == "crawl_started":
+                    total_pages = fields.get("total_pages")
+                    if isinstance(total_pages, int):
+                        crawl_stats["total_pages"] = total_pages
+                elif event == "page_finished":
+                    crawl_stats["scanned_pages"] += 1
+                    if fields.get("skipped"):
+                        crawl_stats["skipped_pages"] += 1
+                    elif fields.get("saved", True):
+                        crawl_stats["saved_pages"] += 1
+
+                progress_fields = {
+                    **fields,
+                    "toplam_sayfa": crawl_stats["total_pages"] or fields.get("total_pages", "bilinmiyor"),
+                    "taranan_sayfa": crawl_stats["scanned_pages"],
+                    "kaydedilen_sayfa": crawl_stats["saved_pages"],
+                    "atlanan_sayfa": crawl_stats["skipped_pages"],
+                }
+                log_info(
+                    logger,
+                    messages.get(event, "Tarama ilerlemesi guncellendi"),
+                    stage="crawl4ai.progress",
+                    **progress_fields,
+                )
+
             if include_children:
-                markdown, page_count = crawl_url_tree_to_markdown(url)
+                markdown, page_count = crawl_url_tree_to_markdown(url, progress_callback=crawl_progress)
             else:
-                markdown = crawl_url_to_markdown(url)
+                markdown = crawl_url_to_markdown(url, progress_callback=crawl_progress)
                 page_count = 1
+            if not crawl_stats["total_pages"]:
+                crawl_stats["total_pages"] = page_count
+            if not crawl_stats["scanned_pages"]:
+                crawl_stats["scanned_pages"] = page_count
+            if not crawl_stats["saved_pages"]:
+                crawl_stats["saved_pages"] = page_count
             markdown_path = save_web_markdown(url, markdown, WEB_MARKDOWN_DIR)
             save_download_record(
                 video_name=os.path.splitext(os.path.basename(markdown_path))[0],
@@ -1092,8 +1142,18 @@ def crawl_url_to_markdown_route():
                 downloader="crawl4ai",
                 url=url,
             )
-            log_info(logger, "Web sayfasi Markdown olarak kaydedildi", stage="crawl4ai.crawl", url=url, markdown_path=markdown_path)
-            return _json_response({"status": "success", "engine": "crawl4ai", "url": url, "markdown_path": markdown_path, "page_count": page_count, "text": markdown}, operation_id=operation_id)
+            log_info(
+                logger,
+                "Web taramasi tamamlandi",
+                stage="crawl4ai.crawl",
+                url=url,
+                markdown_path=markdown_path,
+                toplam_sayfa=crawl_stats["total_pages"],
+                taranan_sayfa=crawl_stats["scanned_pages"],
+                kaydedilen_sayfa=crawl_stats["saved_pages"],
+                atlanan_sayfa=crawl_stats["skipped_pages"],
+            )
+            return _json_response({"status": "success", "engine": "crawl4ai", "url": url, "markdown_path": markdown_path, "page_count": page_count, "crawl_stats": crawl_stats, "text": markdown}, operation_id=operation_id)
     except (ValueError, WebMarkdownUnavailableError) as exc:
         with bind_operation(operation_id):
             log_warning(logger, "Web sayfasi Markdown istegi gecersiz", stage="crawl4ai.validation", url=url, error=str(exc))

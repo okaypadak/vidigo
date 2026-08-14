@@ -232,22 +232,6 @@
       background: rgba(255, 255, 255, 0.02);
     }
 
-    .markdown-option {
-      display: flex;
-      align-items: flex-start;
-      gap: 10px;
-      margin-top: 16px;
-      padding: 12px 14px;
-      border: 1px solid var(--line);
-      background: rgba(72, 243, 255, 0.035);
-      color: var(--text);
-      cursor: pointer;
-    }
-
-    .markdown-option input { margin: 3px 0 0; accent-color: var(--cyan); }
-    .markdown-option strong { display: block; font-size: 0.9rem; }
-    .markdown-option small { display: block; margin-top: 3px; color: var(--muted); line-height: 1.45; }
-
     .child-pages-option {
       display: none;
       margin-top: 10px;
@@ -519,7 +503,7 @@
       <section class="panel" id="singlePanel">
         <div class="eyebrow"><span>01</span> URL Indir</div>
         <label class="label" for="videoUrl">YouTube, Instagram veya web sayfasi URL</label>
-        <input type="text" id="videoUrl" placeholder="ornek: https://developers.facebook.com/documentation/..." />
+        <input type="text" id="videoUrl" placeholder="ornek: https://developers.facebook.com/documentation/..." oninput="updateUrlAction()" />
         <div class="badge-row">
           <div class="badge">YouTube video</div>
           <div class="badge">YouTube playlist</div>
@@ -528,10 +512,6 @@
           <div class="badge">Instagram hesap</div>
           <div class="badge">Web dokumantasyonu</div>
         </div>
-        <label class="markdown-option">
-          <input type="checkbox" id="webMarkdownMode" onchange="toggleWebMarkdownMode()" />
-          <span><strong>Siteyi Markdown olarak indir</strong><small>Menu ve link kalabaligi olmadan ana icerigi Markdown'a cevirir.</small></span>
-        </label>
         <label class="child-pages-option" id="childPagesOption"><input type="checkbox" id="includeChildPages" checked /> Alt sayfalari da tek dosyada birlestir</label>
         <div class="actions" id="downloadActions">
           <button class="btn btn-secondary" id="btnTranscript" type="button" onclick="downloadSingle('transcript_only')">Sadece Transkript</button>
@@ -628,8 +608,20 @@
       toastTimer = setTimeout(() => toast.classList.remove("show"), 3200);
     }
 
-    function toggleWebMarkdownMode() {
-      const enabled = document.getElementById("webMarkdownMode").checked;
+    function isMediaPlatformUrl(url) {
+      try {
+        const hostname = new URL(url).hostname.toLowerCase();
+        return hostname === "youtu.be"
+          || hostname === "youtube.com" || hostname.endsWith(".youtube.com")
+          || hostname === "instagram.com" || hostname.endsWith(".instagram.com");
+      } catch {
+        return false;
+      }
+    }
+
+    function updateUrlAction() {
+      const url = document.getElementById("videoUrl").value.trim();
+      const enabled = Boolean(url) && !isMediaPlatformUrl(url);
       document.getElementById("childPagesOption").classList.toggle("show", enabled);
       document.getElementById("btnWebMarkdown").style.display = enabled ? "inline-flex" : "none";
       ["btnTranscript", "btnMp3", "btnDownload"].forEach(id => {
@@ -877,6 +869,7 @@
       }
     }
 
+    updateUrlAction();
     checkGpuStatus();
   </script>
 </body>

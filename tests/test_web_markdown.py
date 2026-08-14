@@ -11,7 +11,7 @@ def test_validate_web_url_rejects_localhost():
 
 
 def test_crawl_url_to_markdown_uses_crawler(monkeypatch):
-    async def fake_crawl(url):
+    async def fake_crawl(url, progress_callback=None):
         assert url == "https://example.com"
         return "# Baslik", 1
 
@@ -22,7 +22,7 @@ def test_crawl_url_to_markdown_uses_crawler(monkeypatch):
 
 
 def test_crawl_url_tree_to_markdown_includes_children(monkeypatch):
-    async def fake_crawl(url, include_children=False):
+    async def fake_crawl(url, include_children=False, progress_callback=None):
         assert include_children is True
         return "# Root\n\n---\n\n# Child", 2
 
@@ -30,6 +30,56 @@ def test_crawl_url_tree_to_markdown_includes_children(monkeypatch):
     monkeypatch.setattr(web_markdown, "_crawl", fake_crawl)
 
     assert web_markdown.crawl_url_tree_to_markdown("https://example.com") == ("# Root\n\n---\n\n# Child", 2)
+
+
+def test_crawl_reports_discovered_page_progress(monkeypatch):
+    class Result:
+        success = True
+        markdown = "# Sayfa"
+
+    class Crawler:
+        def __init__(self, **kwargs):
+            pass
+
+        async def arun(self, **kwargs):
+            return Result()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+    class BrowserConfig:
+        def __init__(self, **kwargs):
+            pass
+
+    adapter = type("Adapter", (), {
+        "requires_interactive_collection": False,
+        "discover": lambda self, *_: web_crawl_adapters.CrawlAccessPlan(
+            name="test", urls=["https://example.com/one", "https://example.com/two"]
+        ),
+    })()
+    events = []
+    monkeypatch.setattr(web_markdown, "_load_crawler", lambda: (Crawler, BrowserConfig, None, object, None, None, None, None, None, None))
+    monkeypatch.setattr(web_markdown, "resolve_site_adapter", lambda url: adapter)
+    monkeypatch.setattr(web_markdown, "_navigation_discovery_config", lambda: object())
+    monkeypatch.setattr(web_markdown, "_crawler_run_config", lambda *args, **kwargs: object())
+    async def no_native_pages(*args, **kwargs):
+        return []
+
+    monkeypatch.setattr(web_markdown, "fetch_access_plan", no_native_pages)
+
+    markdown, count = asyncio.run(web_markdown._crawl(
+        "https://example.com/root", include_children=True,
+        progress_callback=lambda event, **fields: events.append((event, fields)),
+    ))
+
+    assert markdown == "# Sayfa\n\n---\n\n# Sayfa"
+    assert count == 2
+    assert ("crawl_plan_ready", {"total_pages": 2, "source": "test"}) in events
+    assert [event for event, _ in events].count("page_started") == 2
+    assert [event for event, _ in events].count("page_finished") == 2
 
 
 def test_save_web_markdown_writes_file(tmp_path):
@@ -96,21 +146,108 @@ def test_resolve_site_adapter_uses_ideasoft_adapter():
     assert isinstance(adapter, web_crawl_adapters.IdeasoftStoplightAdapter)
 
 
-def test_ideasoft_adapter_selects_only_requested_documentation_tree():
-    html = '''
-    <a href="/docs/admin-api">Admin API</a>
-    <a href="/docs/admin-api/products">Products</a>
-    <a href="/docs/admin-api/orders#list">Orders</a>
-    <a href="/docs/storefront-api">Storefront API</a>
-    <a href="https://example.com/docs/admin-api/ignored">External</a>
-    '''
+def test_resolve_site_adapter_uses_meta_instagram_adapter():
+    adapter = web_crawl_adapters.resolve_site_adapter(
+        "https://developers.facebook.com/documentation/instagram-platform"
+    )
 
-    assert web_crawl_adapters.IdeasoftStoplightAdapter._documentation_tree_urls(
-        html, "https://apidoc.ideasoft.dev/docs/admin-api"
+    assert isinstance(adapter, web_crawl_adapters.MetaInstagramPlatformAdapter)
+
+
+def test_meta_instagram_adapter_selects_only_menu_urls_in_its_documentation_tree():
+    adapter = web_crawl_adapters.MetaInstagramPlatformAdapter()
+
+    assert adapter._menu_urls([
+        "/documentation/instagram-platform",
+        "/documentation/instagram-platform/overview",
+        "/documentation/instagram-platform/instagram-api-with-instagram-login/get-started",
+        "/documentation/instagram-platform.md",
+        "/documentation/whatsapp",
+        "https://example.com/documentation/instagram-platform/ignored",
+    ], "https://developers.facebook.com/documentation/instagram-platform") == [
+        "https://developers.facebook.com/documentation/instagram-platform",
+        "https://developers.facebook.com/documentation/instagram-platform/overview",
+        "https://developers.facebook.com/documentation/instagram-platform/instagram-api-with-instagram-login/get-started",
+    ]
+
+
+def test_meta_instagram_adapter_uses_curl_user_agent_for_markdown(monkeypatch):
+    class Response:
+        headers = {"Content-Type": "text/markdown; charset=utf-8"}
+
+        def read(self):
+            return b"# Meta rehberi"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    captured = {}
+
+    def fake_urlopen(request, timeout):
+        captured["user_agent"] = request.get_header("User-agent")
+        return Response()
+
+    monkeypatch.setattr(web_crawl_adapters, "urlopen", fake_urlopen)
+
+    assert web_crawl_adapters.MetaInstagramPlatformAdapter._fetch_markdown(
+        "https://developers.facebook.com/documentation/instagram-platform/overview"
+    ) == "# Meta rehberi"
+    assert captured["user_agent"] == "curl/8.0"
+
+
+def test_ideasoft_adapter_flattens_every_leaf_in_stoplight_menu():
+    table_of_contents = {"items": [
+        {"id": "authentication", "slug": "authentication", "title": "Authentication"},
+        {"title": "APIs", "items": [
+            {"id": "products", "slug": "products-list", "title": "Products"},
+            {"title": "Orders", "items": [
+                {"id": "orders", "slug": "orders-list", "title": "Orders"},
+            ]},
+        ]},
+    ]}
+
+    assert web_crawl_adapters.IdeasoftStoplightAdapter._menu_leaf_urls(
+        table_of_contents, "https://apidoc.ideasoft.dev/docs/admin-api"
+    ) == [
+        "https://apidoc.ideasoft.dev/docs/admin-api/authentication",
+        "https://apidoc.ideasoft.dev/docs/admin-api/products-list",
+        "https://apidoc.ideasoft.dev/docs/admin-api/orders-list",
+    ]
+
+
+def test_ideasoft_adapter_keeps_slugged_toc_entries_without_an_id():
+    assert web_crawl_adapters.IdeasoftStoplightAdapter._menu_leaf_urls({"items": [
+        {"slug": "unidentified-but-valid-page", "title": "Untitled"},
+    ]}, "https://apidoc.ideasoft.dev/docs/admin-api") == [
+        "https://apidoc.ideasoft.dev/docs/admin-api/unidentified-but-valid-page",
+    ]
+
+
+def test_ideasoft_adapter_merges_toc_and_rendered_menu_without_duplicates():
+    assert web_crawl_adapters.IdeasoftStoplightAdapter._merge_menu_urls(
+        "https://apidoc.ideasoft.dev/docs/admin-api",
+        ["https://apidoc.ideasoft.dev/docs/admin-api/authentication"],
+        ["https://apidoc.ideasoft.dev/docs/admin-api/authentication", "https://apidoc.ideasoft.dev/docs/admin-api/products"],
     ) == [
         "https://apidoc.ideasoft.dev/docs/admin-api",
+        "https://apidoc.ideasoft.dev/docs/admin-api/authentication",
         "https://apidoc.ideasoft.dev/docs/admin-api/products",
-        "https://apidoc.ideasoft.dev/docs/admin-api/orders",
+    ]
+
+
+def test_ideasoft_adapter_keeps_only_rendered_links_in_current_docs_tree():
+    assert web_crawl_adapters.IdeasoftStoplightAdapter._menu_urls([
+        "/docs/admin-api/authentication",
+        "/docs/admin-api/abandoned-cart-list",
+        "/docs/admin-api/authentication#overview",
+        "/docs/other-api/ignored",
+        "https://example.com/docs/admin-api/ignored",
+    ], "https://apidoc.ideasoft.dev/docs/admin-api") == [
+        "https://apidoc.ideasoft.dev/docs/admin-api/authentication",
+        "https://apidoc.ideasoft.dev/docs/admin-api/abandoned-cart-list",
     ]
 
 
@@ -122,13 +259,34 @@ def test_ideasoft_adapter_collects_rendered_main_content(monkeypatch):
         async def inner_text(self):
             return "IdeaSoft API dokumani"
 
+    class MenuLocator:
+        def __init__(self, selector):
+            self.selector = selector
+
+        async def count(self):
+            return 0
+
+        async def evaluate_all(self, script):
+            assert self.selector == "a[href]"
+            return ["/docs/admin-api/authentication"]
+
     class Page:
+        visited_urls = []
+
+        async def wait_for_load_state(self, **kwargs):
+            return None
+
+        async def wait_for_timeout(self, timeout):
+            return None
+
         def locator(self, selector):
-            assert selector == "main"
-            return Main()
+            if selector == "main":
+                return Main()
+            assert selector in {"button[aria-expanded='false']", "a[href]"}
+            return MenuLocator(selector)
 
         async def goto(self, url, **kwargs):
-            assert url == "https://apidoc.ideasoft.dev/docs/admin-api"
+            self.visited_urls.append(url)
 
         async def wait_for_function(self, script, **kwargs):
             assert "innerText" in script
@@ -160,11 +318,13 @@ def test_ideasoft_adapter_collects_rendered_main_content(monkeypatch):
     monkeypatch.setitem(sys.modules, "playwright.async_api", types.SimpleNamespace(
         async_playwright=lambda: PlaywrightContext()
     ))
-
     adapter = web_crawl_adapters.IdeasoftStoplightAdapter()
+    monkeypatch.setattr(adapter, "_fetch_table_of_contents", lambda: {"items": [
+        {"slug": "authentication", "title": "Authentication"},
+    ]})
     assert asyncio.run(adapter.collect_interactively(
         "https://apidoc.ideasoft.dev/docs/admin-api", include_children=True
-    )) == ["IdeaSoft API dokumani"]
+    )) == ["IdeaSoft API dokumani", "IdeaSoft API dokumani"]
 
 
 def test_hepsiburada_adapter_identifies_closed_menu_group():

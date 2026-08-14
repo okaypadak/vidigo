@@ -26,6 +26,8 @@
 
 ## Web Markdown adapter'ları
 
+- Kullanıcı bir site için "adapter yap" dediğinde adapter, yalnızca açılış sayfasını kaydetmekle yetinmez; render edilmiş sol menüyü/rehber ağacını bulur, ilgili tüm yaprak sayfaları tek tek gezer ve içeriklerini birlikte toplar. Menü yoksa veya doküman gerçekten tek sayfaysa bu durum açıkça belirtilir.
 - `TrendyolDocumentationAdapter` (`trendyol_documentation`)
 - `IdeasoftStoplightAdapter` (`ideasoft_stoplight`)
+- `MetaInstagramPlatformAdapter` (`meta_instagram_platform`)
 - `HepsiburadaPortalAdapter` (`hepsiburada_portal`)
