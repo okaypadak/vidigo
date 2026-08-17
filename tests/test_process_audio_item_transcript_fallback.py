@@ -104,7 +104,7 @@ def test_download_youtube_uses_existing_ytdlp_transcript_file_without_second_sav
 
 
 def test_transcript_only_instagram_keeps_audio_file(monkeypatch, tmp_path):
-    audio_path = tmp_path / "vidigo" / "creator" / "ses" / "Reel.m4a"
+    audio_path = tmp_path / "textforge" / "creator" / "ses" / "Reel.m4a"
     audio_path.parent.mkdir(parents=True)
     audio_path.write_text("audio", encoding="utf-8")
 

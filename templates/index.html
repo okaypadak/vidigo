@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>VIDIGO</title>
+  <title>TextForge</title>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Space+Grotesk:wght@400;500;700&display=swap');
 
@@ -482,7 +482,7 @@
 <body>
   <div class="wrap">
     <div class="hero">
-      <h1 class="brand">VIDIGO</h1>
+      <h1 class="brand">TextForge</h1>
       <div class="sub">
         Instagram hesap URL'si girilirse Indir modunda hesapta gorunen reels/videolar toplu video olarak saklanir; Sadece MP3 modunda her oge m4a olarak kaydedilir. Instagram reel URL'si girilirse tekli akista video tutulmaz, m4a dosyasi kalir ve Whisper metni ciktiya yazilir.
         YouTube playlist veya kanal URL'si girilirse tum videolar batch akista m4a olarak iner. Tek video URL'si girilirse video yerine m4a saklanir ve Whisper transkripti ciktiya eklenir.
@@ -503,7 +503,8 @@
       <section class="panel" id="singlePanel">
         <div class="eyebrow"><span>01</span> URL Indir</div>
         <label class="label" for="videoUrl">YouTube, Instagram veya web sayfasi URL</label>
-        <input type="text" id="videoUrl" placeholder="ornek: https://developers.facebook.com/documentation/..." oninput="updateUrlAction()" />
+        <input type="text" id="videoUrl" list="recentUrls" placeholder="ornek: https://developers.facebook.com/documentation/..." oninput="updateUrlAction()" />
+        <datalist id="recentUrls"></datalist>
         <div class="badge-row">
           <div class="badge">YouTube video</div>
           <div class="badge">YouTube playlist</div>
@@ -558,6 +559,40 @@
     let liveLogCloseTimer = null;
     let currentOperationId = null;
     let progressPollTimer = null;
+    const RECENT_URLS_STORAGE_KEY = "textforge.recentUrls";
+    const RECENT_URLS_LIMIT = 10;
+
+    function loadRecentUrls() {
+      try {
+        const saved = JSON.parse(localStorage.getItem(RECENT_URLS_STORAGE_KEY) || "[]");
+        return Array.isArray(saved)
+          ? saved.filter(url => typeof url === "string" && url.trim())
+          : [];
+      } catch {
+        return [];
+      }
+    }
+
+    function renderRecentUrls() {
+      const options = document.getElementById("recentUrls");
+      options.replaceChildren(...loadRecentUrls().map(url => {
+        const option = document.createElement("option");
+        option.value = url;
+        return option;
+      }));
+    }
+
+    function saveRecentUrl(url) {
+      const normalizedUrl = url.trim();
+      if (!normalizedUrl) return;
+
+      const recentUrls = [
+        normalizedUrl,
+        ...loadRecentUrls().filter(savedUrl => savedUrl !== normalizedUrl)
+      ].slice(0, RECENT_URLS_LIMIT);
+      localStorage.setItem(RECENT_URLS_STORAGE_KEY, JSON.stringify(recentUrls));
+      renderRecentUrls();
+    }
 
     function setDownloadBusy(busy) {
       const ids = ["btnTranscript", "btnMp3", "btnDownload", "btnWebMarkdown"];
@@ -781,6 +816,8 @@
         return;
       }
 
+      saveRecentUrl(url);
+
       setResult("");
       resetProgress();
       const operationId = createOperationId();
@@ -843,6 +880,8 @@
         return;
       }
 
+      saveRecentUrl(url);
+
       const button = document.getElementById("btnWebMarkdown");
       const operationId = createOperationId();
       button.disabled = true;
@@ -869,6 +908,7 @@
       }
     }
 
+    renderRecentUrls();
     updateUrlAction();
     checkGpuStatus();
   </script>

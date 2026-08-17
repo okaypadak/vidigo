@@ -4,10 +4,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     HOME=/data \
-    VIDIGO_HOST=0.0.0.0 \
-    VIDIGO_PORT=5000 \
-    VIDIGO_MCP_HOST=0.0.0.0 \
-    VIDIGO_MCP_PORT=8000
+    TEXTFORGE_HOST=0.0.0.0 \
+    TEXTFORGE_PORT=5000 \
+    TEXTFORGE_MCP_HOST=0.0.0.0 \
+    TEXTFORGE_MCP_PORT=8000
 
 WORKDIR /app
 
@@ -15,7 +15,7 @@ WORKDIR /app
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg curl \
     && rm -rf /var/lib/apt/lists/* \
-    && mkdir -p /data/vidigo /data/cookie /data/vidigo_logs
+    && mkdir -p /data/textforge /data/cookie /data/textforge_logs
 
 COPY requirements.txt ./
 RUN pip install --upgrade pip \

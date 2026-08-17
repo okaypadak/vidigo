@@ -7,7 +7,7 @@ import threading
 from collections import defaultdict, deque
 
 
-_operation_id_var = contextvars.ContextVar("vidigo_operation_id", default="-")
+_operation_id_var = contextvars.ContextVar("textforge_operation_id", default="-")
 
 
 def _stringify(value):
@@ -108,7 +108,7 @@ class LiveLogHandler(logging.Handler):
 
 def configure_logging(log_path):
     root_logger = logging.getLogger()
-    if getattr(root_logger, "_vidigo_logging_configured", False):
+    if getattr(root_logger, "_textforge_logging_configured", False):
         return root_logger
 
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
@@ -128,7 +128,7 @@ def configure_logging(log_path):
         handler.addFilter(OperationContextFilter())
         root_logger.addHandler(handler)
 
-    root_logger._vidigo_logging_configured = True
+    root_logger._textforge_logging_configured = True
     return root_logger
 
 

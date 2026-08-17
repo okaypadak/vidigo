@@ -42,12 +42,12 @@ _PROGRESS_LOCK = threading.Lock()
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.expanduser("~/")
-# Indirilen medya kullanicinin sabit Vidigo klasorunde tutulur.
-AUDIO_DIR = os.path.join(UPLOAD_DIR, "vidigo")
+# Indirilen medya kullanicinin sabit TextForge klasorunde tutulur.
+AUDIO_DIR = os.path.join(UPLOAD_DIR, "textforge")
 DOWNLOAD_DIR = os.path.join(BASE_DIR, "downloads")
 MARKITDOWN_UPLOAD_DIR = os.path.join(DOWNLOAD_DIR, "markitdown_uploads")
 WEB_MARKDOWN_DIR = os.path.join(AUDIO_DIR, "web")
-LOG_DIR = os.path.join(UPLOAD_DIR, "vidigo_logs")
+LOG_DIR = os.path.join(UPLOAD_DIR, "textforge_logs")
 LOG_PATH = os.path.join(LOG_DIR, "app.log")
 
 os.makedirs(AUDIO_DIR, exist_ok=True)
@@ -354,7 +354,7 @@ def _process_audio_item(url, *, cookie_path=None, mode="download", source_type=N
     keep_audio_files = mode in {"download", "mp3_only"}
     request = classify_download_url(url)
     platform = request["platform"]
-    # Instagram transkriptleri icin cikarilan M4A, kullanicinin Vidigo klasorunde
+    # Instagram transkriptleri icin cikarilan M4A, kullanicinin TextForge klasorunde
     # sonraki kullanimlar icin tutulur.
     if platform == "instagram" and mode == "transcript_only":
         keep_audio_files = True
@@ -1084,7 +1084,9 @@ def crawl_url_to_markdown_route():
             def crawl_progress(event, **fields):
                 messages = {
                     "crawl_started": "Web taramasi basladi",
-                    "crawl_menu_expanded": "Sol menu dallari acildi",
+                    "crawl_menu_headings": "Sol menu ana basliklari bulundu",
+                    "crawl_menu_item": "Sol menu ogesi bulundu",
+                    "crawl_menu_opened": "Ideashop API menusu acildi",
                     "crawl_plan_ready": "Tarama listesi hazir",
                     "page_started": "Sayfa taraniyor",
                     "page_finished": "Sayfa tarandi",
@@ -1366,9 +1368,9 @@ def batch_transcribe():
 
 if __name__ == "__main__":
     install_sigint_exit_handler()
-    debug_enabled = os.environ.get("VIDIGO_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
-    host = os.environ.get("VIDIGO_HOST", "127.0.0.1")
-    port = int(os.environ.get("VIDIGO_PORT", "5000"))
+    debug_enabled = os.environ.get("TEXTFORGE_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
+    host = os.environ.get("TEXTFORGE_HOST", "127.0.0.1")
+    port = int(os.environ.get("TEXTFORGE_PORT", "5000"))
     log_info(
         logger,
         "Flask sunucusu baslatiliyor",

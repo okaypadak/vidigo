@@ -154,6 +154,43 @@ def test_resolve_site_adapter_uses_meta_instagram_adapter():
     assert isinstance(adapter, web_crawl_adapters.MetaInstagramPlatformAdapter)
 
 
+def test_resolve_site_adapter_uses_ikas_adapter():
+    adapter = web_crawl_adapters.resolve_site_adapter("https://ikas.dev/docs/intro")
+
+    assert isinstance(adapter, web_crawl_adapters.IkasDeveloperPortalAdapter)
+    assert isinstance(
+        web_crawl_adapters.resolve_site_adapter("https://ikas.com/docs/api/admin-api/products"),
+        web_crawl_adapters.IkasDeveloperPortalAdapter,
+    )
+    assert web_crawl_adapters.resolve_site_adapter(
+        "https://ikas.dev/docs/theme/getting-started/introduction"
+    ) is None
+
+
+def test_ikas_adapter_collects_only_api_docs_menu_leaves():
+    adapter = web_crawl_adapters.IkasDeveloperPortalAdapter()
+
+    assert adapter._menu_urls([
+        "/docs/intro",
+        "/docs/api/getting-started/authentication",
+        "/docs/api/admin-api/products#queries",
+        "/docs/theme/getting-started/introduction",
+        "/docs/dashboard/introduction",
+        "https://ikas.com/docs/api/admin-api/orders",
+        "#",
+    ], "https://ikas.dev/docs/intro") == [
+        "https://ikas.dev/docs/intro",
+        "https://ikas.dev/docs/api/getting-started/authentication",
+        "https://ikas.dev/docs/api/admin-api/products",
+    ]
+
+
+def test_ikas_adapter_uses_api_docs_intro_as_menu_root():
+    assert web_crawl_adapters.IkasDeveloperPortalAdapter._menu_url(
+        "https://ikas.com/docs/api/admin-api/products"
+    ) == "https://ikas.com/docs/intro"
+
+
 def test_meta_instagram_adapter_selects_only_menu_urls_in_its_documentation_tree():
     adapter = web_crawl_adapters.MetaInstagramPlatformAdapter()
 
@@ -226,6 +263,66 @@ def test_ideasoft_adapter_keeps_slugged_toc_entries_without_an_id():
     ]
 
 
+def test_ideasoft_adapter_reports_top_level_menu_headings():
+    assert web_crawl_adapters.IdeasoftStoplightAdapter._menu_headings({"items": [
+        {"title": "Authentication"},
+        {"title": "Ideashop API", "items": [{"title": "Orders"}]},
+        {"slug": "untitled"},
+    ]}) == ["Authentication", "Ideashop API"]
+
+
+def test_ideasoft_adapter_lists_ideashop_first_level_menu_items():
+    url, entries = web_crawl_adapters.IdeasoftStoplightAdapter._ideashop_menu_entries({"items": [
+        {"title": "Authentication"},
+        {"slug": "ideashop-api", "title": "Ideashop API", "items": [
+            {"title": "AbandonedCart", "items": [{"title": "GET"}]},
+            {"title": "Orders"},
+        ]},
+    ]}, "https://apidoc.ideasoft.dev/docs/admin-api")
+    assert url == "https://apidoc.ideasoft.dev/docs/admin-api/ideashop-api"
+    assert entries == [
+        {"title": "AbandonedCart", "depth": 0},
+        {"title": "Orders", "depth": 0},
+    ]
+
+
+def test_ideasoft_adapter_lists_only_ideashop_http_method_urls():
+    assert web_crawl_adapters.IdeasoftStoplightAdapter._ideashop_http_method_urls({"items": [
+        {"slug": "ideashop-api", "title": "Ideashop API", "items": [
+            {"title": "AbandonedCart", "items": [
+                {"type": "http_operation", "slug": "cart-list"},
+                {"type": "model", "slug": "cart-schema"},
+            ]},
+        ]},
+    ]}, "https://apidoc.ideasoft.dev/docs/admin-api") == [
+        "https://apidoc.ideasoft.dev/docs/admin-api/cart-list",
+    ]
+
+
+def test_ideasoft_adapter_keeps_http_methods_under_their_menu_group():
+    assert web_crawl_adapters.IdeasoftStoplightAdapter._ideashop_http_method_entries({"items": [
+        {"title": "Ideashop API", "items": [
+            {"title": "Cart", "items": [
+                {"type": "http_operation", "slug": "cart-get"},
+            ]},
+        ]},
+    ]}, "https://apidoc.ideasoft.dev/docs/admin-api") == [{
+        "group_title": "Cart",
+        "method_title": "cart-get",
+        "url": "https://apidoc.ideasoft.dev/docs/admin-api/cart-get",
+    }]
+
+
+def test_ideasoft_adapter_excludes_slugged_toc_container_pages():
+    assert web_crawl_adapters.IdeasoftStoplightAdapter._menu_leaf_urls({"items": [
+        {"slug": "api-overview", "items": [
+            {"slug": "products-list"},
+        ]},
+    ]}, "https://apidoc.ideasoft.dev/docs/admin-api") == [
+        "https://apidoc.ideasoft.dev/docs/admin-api/products-list",
+    ]
+
+
 def test_ideasoft_adapter_merges_toc_and_rendered_menu_without_duplicates():
     assert web_crawl_adapters.IdeasoftStoplightAdapter._merge_menu_urls(
         "https://apidoc.ideasoft.dev/docs/admin-api",
@@ -251,7 +348,7 @@ def test_ideasoft_adapter_keeps_only_rendered_links_in_current_docs_tree():
     ]
 
 
-def test_ideasoft_adapter_collects_rendered_main_content(monkeypatch):
+def test_ideasoft_adapter_collects_ideashop_http_method_content(monkeypatch):
     class Main:
         async def wait_for(self, **kwargs):
             return None
@@ -320,11 +417,26 @@ def test_ideasoft_adapter_collects_rendered_main_content(monkeypatch):
     ))
     adapter = web_crawl_adapters.IdeasoftStoplightAdapter()
     monkeypatch.setattr(adapter, "_fetch_table_of_contents", lambda: {"items": [
-        {"slug": "authentication", "title": "Authentication"},
+        {"slug": "ideashop-api", "title": "Ideashop API", "items": [
+            {"slug": "abandoned-cart", "title": "AbandonedCart", "items": [
+                {"slug": "abandoned-cart-list", "title": "AbandonedCart LIST", "type": "http_operation"},
+            ]},
+        ]},
     ]})
     assert asyncio.run(adapter.collect_interactively(
         "https://apidoc.ideasoft.dev/docs/admin-api", include_children=True
-    )) == ["IdeaSoft API dokumani", "IdeaSoft API dokumani"]
+    )) == ["# AbandonedCart\n\n## AbandonedCart LIST\n\nIdeaSoft API dokumani"]
+
+
+def test_ideasoft_adapter_uses_left_documentation_column_when_available():
+    class Main:
+        async def evaluate(self, script):
+            assert "XPathResult" in script
+            return "Sol dokumantasyon"
+
+    assert asyncio.run(
+        web_crawl_adapters.IdeasoftStoplightAdapter._documentation_content(Main())
+    ) == "Sol dokumantasyon"
 
 
 def test_hepsiburada_adapter_identifies_closed_menu_group():

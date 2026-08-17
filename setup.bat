@@ -9,7 +9,7 @@ set "MCP_SCRIPT=%PROJ_DIR%mcp_server.py"
 
 echo.
 echo =========================================
-echo   Vidigo MCP Setup
+echo   TextForge MCP Setup
 echo =========================================
 echo.
 
@@ -52,7 +52,7 @@ echo   Kurulum tamamlandi!
 echo.
 echo   MCP client config:
 echo.
-"%PYTHON%" -c "import json; cfg={'mcpServers': {'vidigo': {'command': r'%PYTHON%', 'args': [r'%MCP_SCRIPT%']}}}; print(json.dumps(cfg, indent=2))"
+"%PYTHON%" -c "import json; cfg={'mcpServers': {'textforge': {'command': r'%PYTHON%', 'args': [r'%MCP_SCRIPT%']}}}; print(json.dumps(cfg, indent=2))"
 echo =========================================
 echo.
 pause

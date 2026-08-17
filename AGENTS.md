@@ -1,4 +1,4 @@
-# Vidigo geliştirme kuralları
+# TextForge geliştirme kuralları
 
 ## Instagram indirme ve transkript
 
@@ -8,7 +8,7 @@
 - Akış değişmez: `Instaloader → MP4 → ffmpeg ile M4A → Whisper → transcript`.
 - `yt-dlp`, Selenium, `undetected-chromedriver`, tarayıcı otomasyonu veya başka bir Instagram indirme kütüphanesi eklenmez ya da kullanılmaz.
 - Birincil akış başarısız olduğunda farklı bir kütüphaneye, servise veya indirme yöntemine fallback uygulanmaz. Hata kullanıcıya açıkça döndürülür.
-- Instagram için `transcript_only` isteğinde M4A dosyası `C:\Users\<kullanıcı>\vidigo\<hesap>\ses\` altında tutulur; önceki TinyDB kaydı bu isteği atlatmaz.
+- Instagram için `transcript_only` isteğinde M4A dosyası `C:\Users\<kullanıcı>\textforge\<hesap>\ses\` altında tutulur; önceki TinyDB kaydı bu isteği atlatmaz.
 
 ## YouTube indirme ve transkript
 
@@ -21,8 +21,14 @@
 ## Ortak ses ve kayıt kuralları
 
 - Whisper varsayılan dili Türkçe, varsayılan modeli `medium`dür; M4A doğrudan Whisper'a verilir, WAV ara dosyası oluşturulmaz.
-- İndirilen medya kökü `C:\Users\<kullanıcı>\vidigo` olmalıdır; proje köküne veya geçici klasöre medya bırakılmaz.
+- İndirilen medya kökü `C:\Users\<kullanıcı>\textforge` olmalıdır; proje köküne veya geçici klasöre medya bırakılmaz.
 - Transkript, manifest ve TinyDB kaydı ancak işlem sonucunu doğru yansıtacak şekilde yazılır. Başarısız işlem başarıyla indirilmiş gibi işaretlenmez.
+
+## CUDA ve PyTorch
+
+- NVIDIA GPU desteği gereken kurulumlarda önce resmî PyTorch kaynaklarından Windows, Python sürümü ve CUDA için desteklenen en güncel kararlı PyTorch derlemesi doğrulanır.
+- Bu doğrulama yapılmadan rastgele veya eski bir CUDA/PyTorch sürümü denenmez; yalnızca doğrulanan sürüm kurulabilir.
+- Kurulum ve doğrulama, uygulamanın kullandığı sanal ortamda (`.venv312`) yapılır; sistem genelindeki Python paketleri esas alınmaz.
 
 ## Web Markdown adapter'ları
 

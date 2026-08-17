@@ -1,4 +1,4 @@
-"""Vidigo MCP Server — YouTube linkini alır, Whisper ile transkribe eder, Markdown döndürür."""
+"""TextForge MCP Server — medya URL'lerini Whisper ile Markdown metne dönüştürür."""
 
 import os
 import sys
@@ -24,10 +24,10 @@ from transcribers.whisper_transcriber import transcribe_whisper
 from utils.shutdown import install_sigint_exit_handler
 
 mcp = FastMCP(
-    "vidigo",
-    host=os.environ.get("VIDIGO_MCP_HOST", "127.0.0.1"),
-    port=int(os.environ.get("VIDIGO_MCP_PORT", "8000")),
-    streamable_http_path="/vidigo/mcp",
+    "textforge",
+    host=os.environ.get("TEXTFORGE_MCP_HOST", "127.0.0.1"),
+    port=int(os.environ.get("TEXTFORGE_MCP_PORT", "8000")),
+    streamable_http_path="/textforge/mcp",
 )
 
 
@@ -48,7 +48,7 @@ async def _run_streamable_http() -> None:
     asyncio.get_running_loop().set_exception_handler(_ignore_expected_windows_connection_reset)
     await mcp.run_streamable_http_async()
 
-MEDIA_ROOT = os.path.join(os.path.expanduser("~"), "vidigo")
+MEDIA_ROOT = os.path.join(os.path.expanduser("~"), "textforge")
 DOWNLOAD_DIR = os.path.join(MEDIA_ROOT, "mcp_temp")
 TRANSCRIPT_DIR = os.path.join(MEDIA_ROOT, "transcript", "mcp")
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
@@ -161,7 +161,7 @@ def _transcribe_media_to_markdown(
 
 
 def _run_cli() -> int:
-    parser = argparse.ArgumentParser(description="Vidigo MCP server ve CLI araclari.")
+    parser = argparse.ArgumentParser(description="TextForge MCP server ve CLI araclari.")
     subparsers = parser.add_subparsers(dest="command")
 
     subparsers.add_parser(
