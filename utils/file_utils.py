@@ -6,11 +6,11 @@ import unicodedata
 from datetime import datetime
 
 from tinydb import TinyDB
+from utils.storage_paths import DOWNLOAD_ROOT, TRANSCRIPTS_ROOT
 
-_BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-TRANSCRIPT_DIR = os.path.join(_BASE_DIR, "transcripts")
+TRANSCRIPT_DIR = TRANSCRIPTS_ROOT
 DOWNLOAD_DB_PATH = os.path.join(TRANSCRIPT_DIR, "download_history.json")
-DOWNLOAD_MANIFEST_DIR = os.path.join(_BASE_DIR, "downloads", "manifests")
+DOWNLOAD_MANIFEST_DIR = os.path.join(DOWNLOAD_ROOT, "manifests")
 os.makedirs(TRANSCRIPT_DIR, exist_ok=True)
 os.makedirs(DOWNLOAD_MANIFEST_DIR, exist_ok=True)
 

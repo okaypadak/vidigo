@@ -1,12 +1,15 @@
 # TextForge geliştirme kuralları
 
+## Test çalışma kuralı
+
+- Asla test çalıştırma, test ekleme veya test düzenleme.
+
 ## Instagram indirme ve transkript
 
-- Instagram post, reel, profil reels ve ses indirme akışlarında yalnızca `instaloader` kullanılır.
-- Reel metadata'si standart `instaloader.Post.from_shortcode()` GraphQL akışıyla alınır. iPhone API veya başka bir Instaloader erişim yolu eklenmez.
-- Cookie gerekirse yalnızca `~/cookie/instagram.txt` çözülür ve Instaloader oturumuna yüklenir.
-- Akış değişmez: `Instaloader → MP4 → ffmpeg ile M4A → Whisper → transcript`.
-- `yt-dlp`, Selenium, `undetected-chromedriver`, tarayıcı otomasyonu veya başka bir Instagram indirme kütüphanesi eklenmez ya da kullanılmaz.
+- Instagram post, reel, profil reels ve ses indirme akışlarında yalnızca `instagrapi` kullanılır.
+- Cookie gerekirse yalnızca `~/cookie/instagram.txt` çözülür ve Instagrapi oturumuna yüklenir.
+- Akış değişmez: `Instagrapi → MP4 → ffmpeg ile M4A → Whisper → transcript`.
+- `instaloader`, `yt-dlp`, Selenium, `undetected-chromedriver`, tarayıcı otomasyonu veya başka bir Instagram indirme kütüphanesi eklenmez ya da kullanılmaz.
 - Birincil akış başarısız olduğunda farklı bir kütüphaneye, servise veya indirme yöntemine fallback uygulanmaz. Hata kullanıcıya açıkça döndürülür.
 - Instagram için `transcript_only` isteğinde M4A dosyası `C:\Users\<kullanıcı>\textforge\<hesap>\ses\` altında tutulur; önceki TinyDB kaydı bu isteği atlatmaz.
 
@@ -23,6 +26,13 @@
 - Whisper varsayılan dili Türkçe, varsayılan modeli `medium`dür; M4A doğrudan Whisper'a verilir, WAV ara dosyası oluşturulmaz.
 - İndirilen medya kökü `C:\Users\<kullanıcı>\textforge` olmalıdır; proje köküne veya geçici klasöre medya bırakılmaz.
 - Transkript, manifest ve TinyDB kaydı ancak işlem sonucunu doğru yansıtacak şekilde yazılır. Başarısız işlem başarıyla indirilmiş gibi işaretlenmez.
+
+## Windows ve Docker çalışma ortamları
+
+- Yerel Windows başlatıcıları `.venv312\\Scripts\\python.exe` kullanır ve `TEXTFORGE_RUNTIME=windows` ayarlar. Medya kökü `C:\\Users\\<kullanıcı>\\textforge`, cookie kökü `C:\\Users\\<kullanıcı>\\cookie`dir.
+- Docker imajı Linux'tur; `TEXTFORGE_RUNTIME=container`, medya kökü `/data/textforge` ve cookie kökü `/data/cookie`dir. `start_docker_gpu.bat`, Windows'taki bu iki klasörü sırasıyla konteynere bağlar; cookie bağlaması salt-okunurdur.
+- Windows'ta FFmpeg önce proje içindeki `ffmpeg\\ffmpeg.exe`, ardından `PATH` üzerinde aranır. Konteynerde Debian paketindeki `/usr/bin/ffmpeg` kullanılır; Windows `.exe` dosyası veya proje içi paket Linux'ta seçilmez.
+- BgUtil ayrı bir Docker imajı ya da Windows süreci olarak çalıştırılmaz. Yalnız TextForge Docker konteynerinde, `start_web.py` tarafından loopback (`127.0.0.1:4416`) üzerinde başlatılır. Windows'ta BgUtil başlatılmaz ve harici bir sağlayıcıya bağlanılmaz.
 
 ## CUDA ve PyTorch
 

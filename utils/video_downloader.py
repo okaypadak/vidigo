@@ -5,20 +5,29 @@ import os
 import re
 import shutil
 import subprocess
+import time
 from datetime import datetime, timezone
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import HTTPCookieProcessor, Request, build_opener, urlopen
 
-import instaloader
 import yt_dlp
-from instaloader.nodeiterator import NodeIterator
 
 from utils.app_logging import log_exception, log_info, log_warning
-from utils.ffmpeg_utils import get_ffmpeg_binary, get_ffmpeg_dir
+from utils.ffmpeg_utils import get_ffmpeg_binary, get_ytdlp_ffmpeg_location
 from utils.youtube_utils import extract_youtube_playlist_id
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".mkv"}
+INSTAGRAM_PROFILE_LOOKUP_RETRY_DELAYS_SECONDS = (60, 180)
+INSTAGRAM_PROFILE_ITEM_DELAY_SECONDS = 10
+# Browser-exported Instagram cookies are bound to the browser request
+# fingerprint.  Instaloader's upstream default currently advertises Linux,
+# whereas this application imports cookies from the user's Windows browser.
+# Keep an explicit, overrideable browser UA for all Instagram web requests.
+INSTAGRAM_WEB_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
+)
 INSTAGRAM_RESERVED_PATHS = {
     "accounts",
     "about",
@@ -37,10 +46,57 @@ INSTAGRAM_RESERVED_PATHS = {
 logger = logging.getLogger(__name__)
 
 
+def get_instagram_profile_downloader():
+    """Return the provider selected for profile/reels URLs.
+
+    The setting deliberately applies only to profile reels. Individual reel
+    downloads retain their existing Instaloader implementation.
+    """
+    provider = os.environ.get("INSTAGRAM_PROFILE_DOWNLOADER", "instagrapi").strip().lower()
+    if provider not in {"instagrapi", "instaloader"}:
+        raise ValueError(
+            "INSTAGRAM_PROFILE_DOWNLOADER yalnizca 'instagrapi' veya 'instaloader' olabilir."
+        )
+    return provider
+
+
+def _is_instagram_rate_limit_error(error):
+    error_text = str(error).lower()
+    return "429" in error_text or "too many requests" in error_text
+
+
+def _load_instagram_profile(loader, username):
+    """Resolve a profile without turning a transient 429 into rapid repeat requests."""
+    for attempt, retry_delay in enumerate(INSTAGRAM_PROFILE_LOOKUP_RETRY_DELAYS_SECONDS, start=1):
+        try:
+            return instaloader.Profile.from_username(loader.context, username)
+        except instaloader.exceptions.ProfileNotExistsException:
+            raise
+        except Exception as exc:
+            if not _is_instagram_rate_limit_error(exc):
+                raise
+            log_warning(
+                logger,
+                "Instagram profil sorgusu hiz sinirina takildi; bekleyip tekrar denenecek",
+                stage="instagram.profile.lookup_rate_limit",
+                username=username,
+                attempt=attempt,
+                retry_delay_seconds=retry_delay,
+            )
+            time.sleep(retry_delay)
+
+    return instaloader.Profile.from_username(loader.context, username)
+
+
 def sanitize_filename(name):
     cleaned = re.sub(r'[\\/:*?"<>|]+', " ", str(name or "audio"))
     cleaned = re.sub(r"\s+", " ", cleaned).strip().rstrip(".")
     return cleaned or "audio"
+
+
+def sanitize_directory_name(name):
+    """Kullanıcıdan gelen klasör adlarını güvenli ve küçük harfli tut."""
+    return sanitize_filename(name).lower()
 
 
 def build_unique_filepath(directory, title, extension):
@@ -72,6 +128,15 @@ def _youtube_js_runtime_options():
     if not node_path:
         return {}
     return {"js_runtimes": {"node": {"path": node_path}}}
+
+
+def _youtube_extractor_args(player_client):
+    """Build YouTube arguments, including an explicitly configured POT provider."""
+    extractor_args = {"youtube": {"player_client": [player_client]}}
+    pot_provider_url = os.environ.get("TEXTFORGE_BGUTIL_BASE_URL", "").strip().rstrip("/")
+    if pot_provider_url:
+        extractor_args["youtubepot-bgutilhttp"] = {"base_url": [pot_provider_url]}
+    return extractor_args
 
 
 def extract_instagram_shortcode(url):
@@ -252,6 +317,7 @@ def resolve_cookie_file(platform, cookie_path=None, cookie_dir="~/cookie"):
     base_names = {
         "youtube": ("youtube.txt", "youtube_cookies.txt", "cookies.txt"),
         "instagram": ("instagram.txt", "instagram_cookies.txt", "cookies.txt"),
+        "x": ("x.txt", "twitter.txt", "cookies.txt"),
     }.get(platform, ("cookies.txt",))
 
     for name in base_names:
@@ -276,7 +342,7 @@ def _iter_directory_files(directory):
 
 
 def _uploader_download_dir(base_dir, uploader):
-    safe_uploader = sanitize_filename(uploader)
+    safe_uploader = sanitize_directory_name(uploader)
     if not safe_uploader:
         return os.path.abspath(base_dir)
 
@@ -434,12 +500,6 @@ def _apply_instagram_cookiefile(loader, cookie_path):
         if cookie.name and cookie.value:
             cookie_map[cookie.name] = cookie.value
 
-    loader.context.update_cookies(cookie_map)
-
-    csrf_token = cookie_map.get("csrftoken")
-    if csrf_token:
-        loader.context._session.headers.update({"X-CSRFToken": csrf_token})
-
     if not cookie_map.get("sessionid"):
         raise ValueError(
             "Instagram cookie dosyasinda sessionid bulunamadi. "
@@ -447,6 +507,15 @@ def _apply_instagram_cookiefile(loader, cookie_path):
         )
 
     ds_user_id = cookie_map.get("ds_user_id")
+    # update_cookies() only adds cookie values to the anonymous session.  It
+    # leaves context.username empty, so Instaloader treats subsequent profile
+    # requests as logged out.  load_session() also establishes the browser
+    # headers (including X-CSRFToken) required by an authenticated session.
+    session_username = os.environ.get("TEXTFORGE_INSTAGRAM_COOKIE_USERNAME", "").strip()
+    if not session_username:
+        session_username = f"instagram_cookie_{ds_user_id}" if ds_user_id else "instagram_cookie_session"
+    loader.context.load_session(session_username, cookie_map)
+
     if ds_user_id and str(ds_user_id).isdigit():
         loader.context.user_id = int(ds_user_id)
 
@@ -462,8 +531,10 @@ def _apply_instagram_cookiefile(loader, cookie_path):
 def _build_instaloader(output_dir, cookie_path=None):
     os.makedirs(output_dir, exist_ok=True)
     log_info(logger, "Instaloader nesnesi kuruluyor", stage="instagram.session", output_dir=output_dir)
+    user_agent = os.environ.get("TEXTFORGE_INSTAGRAM_USER_AGENT", INSTAGRAM_WEB_USER_AGENT).strip()
     loader = instaloader.Instaloader(
         quiet=True,
+        user_agent=user_agent or INSTAGRAM_WEB_USER_AGENT,
         dirname_pattern=output_dir,
         filename_pattern="{target}_{shortcode}",
         download_pictures=False,
@@ -580,30 +651,22 @@ def _instagram_reel_item_from_node(node, username):
 
 
 def _instagram_profile_reels_iterator(loader, profile, username):
-    user_id = getattr(profile, "userid", None)
-    if user_id:
-        return NodeIterator(
-            context=loader.context,
-            edge_extractor=_extract_instagram_reels_edges,
-            node_wrapper=lambda node: _instagram_reel_item_from_node(node, username),
-            query_variables={
-                "data": {
-                    "page_size": 12,
-                    "include_feed_video": True,
-                    "target_user_id": str(user_id),
-                }
-            },
-            query_referer=f"https://www.instagram.com/{username}/",
-            is_first=instaloader.Profile._make_is_newest_checker(),
-            doc_id="7845543455542541",
-            query_hash=None,
-        )
+    """Return reels through Instaloader's maintained profile API.
 
-    return profile.get_reels() if hasattr(profile, "get_reels") else profile.get_posts()
+    Instagram regularly invalidates GraphQL document IDs.  Keeping a local
+    hard-coded query here meant that profile-reels downloads silently stopped
+    whenever that ID changed, despite Instaloader already maintaining the
+    request implementation in ``Profile.get_reels``.
+    """
+    if hasattr(profile, "get_reels"):
+        return profile.get_reels()
+    return profile.get_posts()
 
 
 def _extract_audio_to_m4a(video_path, audio_path):
     ffmpeg_bin = get_ffmpeg_binary()
+    if not ffmpeg_bin:
+        raise FileNotFoundError("FFmpeg bulunamadi. Windows'ta ffmpeg\\ffmpeg.exe veya PATH'i, konteynerde /usr/bin/ffmpeg beklenir.")
     commands = (
         [ffmpeg_bin, "-y", "-i", video_path, "-vn", "-c:a", "copy", audio_path],
         [ffmpeg_bin, "-y", "-i", video_path, "-vn", "-c:a", "aac", "-b:a", "192k", audio_path],
@@ -707,13 +770,46 @@ class YtDlpMessageBridge:
 def download_instagram_video(url, save_path="downloads", cookie_path=None):
     abs_save_path = os.path.abspath(save_path)
     os.makedirs(abs_save_path, exist_ok=True)
-    shortcode = resolve_instagram_shortcode(url, cookie_path=cookie_path)
-    if not shortcode:
+    if not extract_instagram_shortcode(url) and not is_instagram_share_url(url):
         raise ValueError("Gecerli bir Instagram post veya reel URL girin.")
 
-    log_info(logger, "Instagram tek video akisi basladi", stage="instagram.download", url=url, shortcode=shortcode, save_path=abs_save_path)
-    loader = _build_instaloader(abs_save_path, cookie_path=cookie_path)
-    post = instaloader.Post.from_shortcode(loader.context, shortcode)
+    client = _get_instagrapi_client_class()()
+    try:
+        _authenticate_instagrapi_client(client, cookie_path)
+        media_pk = client.media_pk_from_url(url)
+        media = client.media_info(media_pk)
+        if not getattr(media, "video_url", None):
+            raise ValueError("Instagram gonderisi video icermiyor.")
+        video_path = client.video_download(media_pk, folder=abs_save_path)
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise RuntimeError(f"Instagrapi Instagram videosunu indiremedi: {exc}") from exc
+
+    if not video_path or not os.path.isfile(video_path):
+        raise FileNotFoundError("Instagrapi video dosyasini indirmedi.")
+    username = getattr(getattr(media, "user", None), "username", None) or "instagram"
+    item = _instagrapi_item(media, video_path, username)
+    item = _move_item_file_to_uploader_dir(item, abs_save_path)
+    log_info(logger, "Instagram tek video akisi tamamlandi", stage="instagram.download", url=url, file_path=item["file_path"])
+    return item
+
+
+def download_instagram_video_instaloader_removed(*_args, **_kwargs):
+    """Compatibility sentinel: Instaloader is not supported for Instagram."""
+    raise RuntimeError("Instagram indirmelerinde yalnizca Instagrapi kullanilir.")
+
+
+def download_instagram_profile_reels_instaloader(url, save_path="downloads", cookie_path=None, audio_only=False, item_callback=None):
+    """Removed provider entrypoint retained only to fail explicitly."""
+    raise RuntimeError("Instagram profil indirmelerinde yalnizca Instagrapi kullanilir.")
+
+
+def _legacy_instaloader_implementation_removed():
+    """Marker for the deleted Instaloader implementation."""
+    return None
+
+'''
     if not post.is_video:
         raise ValueError("Instagram gonderisi video icermiyor.")
 
@@ -726,29 +822,30 @@ def download_instagram_video(url, save_path="downloads", cookie_path=None):
     item = _move_item_file_to_uploader_dir(item, abs_save_path)
     log_info(logger, "Instagram tek video akisi tamamlandi", stage="instagram.download", shortcode=shortcode, file_path=item["file_path"])
     return item
+'''
 
 
-def download_instagram_profile_reels(url, save_path="downloads", cookie_path=None, audio_only=False, item_callback=None):
+def _deprecated_download_instagram_profile_reels_instaloader(url, save_path="downloads", cookie_path=None, audio_only=False, item_callback=None):
     username = extract_instagram_username(url)
     if not username:
         raise ValueError("Instagram hesap URL'si bekleniyor.")
 
     base_save_path = os.path.abspath(save_path)
-    safe_username = sanitize_filename(username)
-    if os.path.basename(base_save_path) == safe_username:
-        account_dir = base_save_path
-    else:
-        account_dir = os.path.abspath(os.path.join(base_save_path, safe_username))
+    # The shared download service owns the destination and, when requested,
+    # the MP4 -> M4A conversion.  Do not create another provider-specific
+    # username directory here: callers may deliberately pass <account>/ses.
+    account_dir = base_save_path
     log_info(logger, "Instagram profil reels akisi basladi", stage="instagram.profile", url=url, username=username, account_dir=account_dir)
     loader = _build_instaloader(account_dir, cookie_path=cookie_path)
     try:
-        profile = instaloader.Profile.from_username(loader.context, username)
+        profile = _load_instagram_profile(loader, username)
     except instaloader.exceptions.ProfileNotExistsException:
         _raise_instagram_profile_lookup_error(username, cookie_path)
 
     items = []
     errors = []
     index = 0
+    download_attempts = 0
     try:
         posts = _instagram_profile_reels_iterator(loader, profile, username)
         post_iterator = iter(posts)
@@ -797,7 +894,7 @@ def download_instagram_profile_reels(url, save_path="downloads", cookie_path=Non
         shortcode = getattr(post, "shortcode", None) or f"index-{index}"
 
         existing_file = _find_existing_instagram_file(
-            account_dir, username, getattr(post, "shortcode", None), audio_only=audio_only
+            account_dir, username, getattr(post, "shortcode", None), audio_only=False
         )
         if existing_file:
             log_info(
@@ -823,6 +920,17 @@ def download_instagram_profile_reels(url, save_path="downloads", cookie_path=Non
             continue
 
         try:
+            if download_attempts:
+                log_info(
+                    logger,
+                    "Sonraki Instagram reel indirmesinden once bekleniyor",
+                    stage="instagram.profile.item_wait",
+                    username=username,
+                    shortcode=shortcode,
+                    delay_seconds=INSTAGRAM_PROFILE_ITEM_DELAY_SECONDS,
+                )
+                time.sleep(INSTAGRAM_PROFILE_ITEM_DELAY_SECONDS)
+            download_attempts += 1
             video_path = _download_instaloader_post(loader, post, account_dir, sanitize_filename(username))
             if not video_path:
                 error_text = "Instaloader video dosyasini indirmedi."
@@ -847,18 +955,7 @@ def download_instagram_profile_reels(url, save_path="downloads", cookie_path=Non
                 )
                 continue
 
-            if audio_only:
-                stem = os.path.splitext(os.path.basename(video_path))[0]
-                audio_path = build_unique_filepath(os.path.dirname(video_path), stem, ".m4a")
-                _extract_audio_to_m4a(video_path, audio_path)
-                try:
-                    os.remove(video_path)
-                    log_info(logger, "Gecici video dosyasi silindi", stage="instagram.profile", video_path=video_path)
-                except OSError:
-                    log_warning(logger, "Gecici video dosyasi silinemedi", stage="instagram.profile", video_path=video_path)
-                item = _instagram_item_from_post(post, audio_path)
-            else:
-                item = _instagram_item_from_post(post, video_path)
+            item = _instagram_item_from_post(post, video_path)
 
             items.append(item)
             if item_callback:
@@ -931,6 +1028,189 @@ def download_instagram_profile_reels(url, save_path="downloads", cookie_path=Non
     return result
 
 
+def _get_instagrapi_client_class():
+    try:
+        from instagrapi import Client
+    except ImportError as exc:
+        raise RuntimeError(
+            "Instagrapi kurulu degil. requirements.txt bagimliliklarini kurup uygulamayi yeniden baslatin."
+        ) from exc
+    return Client
+
+
+def _instagram_sessionid_from_cookiefile(cookie_path):
+    if not cookie_path:
+        raise ValueError("Instagrapi ile profil reels indirmek icin instagram cookie dosyasi gerekli.")
+
+    cookie_jar = http.cookiejar.MozillaCookieJar(cookie_path)
+    cookie_jar.load(ignore_discard=True, ignore_expires=True)
+    for cookie in cookie_jar:
+        if cookie.name == "sessionid" and cookie.value:
+            return cookie.value
+    raise ValueError("Instagram cookie dosyasinda sessionid bulunamadi. ~/cookie/instagram.txt dosyasini yenileyin.")
+
+
+def _instagrapi_settings_path(cookie_path):
+    configured_path = os.environ.get("TEXTFORGE_INSTAGRAPI_SETTINGS_PATH", "").strip()
+    if configured_path:
+        return os.path.abspath(os.path.expanduser(configured_path))
+    if cookie_path:
+        return os.path.join(os.path.dirname(os.path.abspath(cookie_path)), "instagram_instagrapi_settings.json")
+    return None
+
+
+def _authenticate_instagrapi_client(client, cookie_path):
+    """Authenticate without ever persisting the account password.
+
+    A browser-exported Instagram ``sessionid`` can be valid for the web API yet
+    rejected by Instagram's mobile API.  Instagrapi's saved settings contain a
+    mobile session and are therefore preferred on later launches.
+    """
+    settings_path = _instagrapi_settings_path(cookie_path)
+    if settings_path and os.path.isfile(settings_path):
+        client.load_settings(settings_path)
+        log_info(logger, "Kaydedilmis Instagrapi oturumu yuklendi", stage="instagram.instagrapi.session",
+                 settings_path=settings_path)
+        return
+
+    login_username = (
+        os.environ.get("TEXTFORGE_INSTAGRAM_USERNAME", "").strip()
+        or os.environ.get("INSTAGRAM_USERNAME", "").strip()
+    )
+    login_password = (
+        os.environ.get("TEXTFORGE_INSTAGRAM_PASSWORD", "")
+        or os.environ.get("INSTAGRAM_PASSWORD", "")
+    )
+    if login_username or login_password:
+        if not (login_username and login_password):
+            raise ValueError(
+                "Instagrapi girisi icin TEXTFORGE_INSTAGRAM_USERNAME ve "
+                "TEXTFORGE_INSTAGRAM_PASSWORD birlikte ayarlanmali."
+            )
+        client.login(login_username, login_password)
+        if settings_path:
+            client.dump_settings(settings_path)
+            log_info(logger, "Instagrapi mobil oturumu kaydedildi", stage="instagram.instagrapi.session",
+                     settings_path=settings_path)
+        return
+
+    sessionid = _instagram_sessionid_from_cookiefile(cookie_path)
+    client.login_by_sessionid(sessionid)
+
+
+def _instagrapi_item(media, file_path, username):
+    shortcode = str(getattr(media, "code", "") or getattr(media, "pk", ""))
+    caption = str(getattr(media, "caption_text", "") or "").strip()
+    created_at = getattr(media, "taken_at", None)
+    return {
+        "id": shortcode,
+        "shortcode": shortcode,
+        "video_id": shortcode,
+        "title": caption.splitlines()[0][:120] if caption else f"{username}_{shortcode}",
+        "caption": caption,
+        "uploader": username,
+        "platform": "instagram",
+        "source_url": f"https://www.instagram.com/reel/{shortcode}/",
+        "webpage_url": f"https://www.instagram.com/reel/{shortcode}/",
+        "file_name": os.path.basename(file_path),
+        "file_path": os.path.abspath(file_path),
+        "downloaded_at": datetime.now().isoformat(),
+        "published_at": created_at.isoformat() if hasattr(created_at, "isoformat") else None,
+        "likes": getattr(media, "like_count", None),
+        "comments": getattr(media, "comment_count", None),
+    }
+
+
+def download_instagram_profile_reels_instagrapi(url, save_path="downloads", cookie_path=None, audio_only=False, item_callback=None):
+    """Download a profile's Reels through Instagrapi's authenticated clips API."""
+    username = extract_instagram_username(url)
+    if not username:
+        raise ValueError("Instagram hesap URL'si bekleniyor.")
+
+    base_save_path = os.path.abspath(save_path)
+    account_dir = base_save_path
+    os.makedirs(account_dir, exist_ok=True)
+
+    client = _get_instagrapi_client_class()()
+    try:
+        log_info(logger, "Instagrapi profil reels akisi basladi", stage="instagram.instagrapi",
+                 username=username, account_dir=account_dir)
+        _authenticate_instagrapi_client(client, cookie_path)
+        target_user_id = client.user_id_from_username(username)
+        reels = client.user_clips(target_user_id, amount=0)
+    except Exception as exc:
+        raise RuntimeError(
+            "Instagrapi Instagram oturumunu veya profil reels listesini acamadi. "
+            "Tarayicidan alinan sessionid mobil API tarafinda reddedilebilir; bu durumda "
+            "TEXTFORGE_INSTAGRAM_USERNAME ve TEXTFORGE_INSTAGRAM_PASSWORD ile bir kez yerelde giris yapin. "
+            f"Asil hata: {exc}"
+        ) from exc
+
+    if not reels:
+        raise FileNotFoundError("Instagram profilinde indirilebilir reel bulunamadi veya reels listesi bos dondu.")
+
+    items = []
+    errors = []
+    for index, media in enumerate(reels, start=1):
+        shortcode = str(getattr(media, "code", "") or getattr(media, "pk", index))
+        existing_file = _find_existing_instagram_file(account_dir, username, shortcode, audio_only=audio_only)
+        try:
+            video_path = existing_file or client.clip_download(int(media.pk), folder=account_dir)
+            if not video_path or not os.path.isfile(video_path):
+                raise FileNotFoundError("Instagrapi reel video dosyasini indirmedi.")
+            item_path = video_path
+            if audio_only:
+                stem = os.path.splitext(os.path.basename(video_path))[0]
+                item_path = build_unique_filepath(os.path.dirname(video_path), stem, ".m4a")
+                _extract_audio_to_m4a(video_path, item_path)
+                if not existing_file:
+                    os.remove(video_path)
+            item = _instagrapi_item(media, item_path, username)
+            items.append(item)
+            if item_callback:
+                item_callback(item, platform="instagram", source_type="profile_reels", source_name=username,
+                              source_url=f"https://www.instagram.com/{username}/", download_dir=account_dir,
+                              downloader="instagrapi")
+        except Exception as exc:
+            errors.append({"shortcode": shortcode, "stage": "download", "error": str(exc)})
+            log_warning(logger, "Instagrapi reel indirilemedi", stage="instagram.instagrapi", username=username,
+                        shortcode=shortcode, error=str(exc))
+
+    if not items:
+        error_text = errors[0]["error"] if errors else "Bilinmeyen hata"
+        raise RuntimeError(f"Instagrapi reels listesini aldi ancak video indirilemedi: {error_text}")
+
+    result = {
+        "platform": "instagram",
+        "source_type": "profile_reels",
+        "source_name": username,
+        "source_url": f"https://www.instagram.com/{username}/",
+        "download_dir": account_dir,
+        "items": items,
+    }
+    if errors:
+        result["errors"] = errors
+        result["failed_count"] = len(errors)
+    return result
+
+
+def download_instagram_profile_reels(url, save_path="downloads", cookie_path=None, audio_only=False, item_callback=None):
+    """Download profile Reels exclusively through Instagrapi.
+
+    Audio conversion is intentionally deferred to ``download_media`` so every
+    adapter uses the same FFmpeg stage.
+    """
+    result = download_instagram_profile_reels_instagrapi(
+        url,
+        save_path=save_path,
+        cookie_path=cookie_path,
+        audio_only=False,
+        item_callback=item_callback,
+    )
+    result["downloader"] = "instagrapi"
+    return result
+
+
 def download_instagram_audio(url, save_path="downloads", codec="m4a", cookie_path=None):
     abs_save_path = os.path.abspath(save_path)
     log_info(logger, "Instagram ses cikarma akisi basladi", stage="instagram.audio", url=url, codec=codec, save_path=abs_save_path)
@@ -991,7 +1271,7 @@ def convert_items_to_audio(items, codec="m4a"):
 
 
 def _build_ytdlp_video_options(abs_save_path, cookie_path=None, allow_playlist=False):
-    ffmpeg_dir = get_ffmpeg_dir()
+    ffmpeg_location = get_ytdlp_ffmpeg_location()
     downloaded_files = {}
     reporter = YtDlpProgressReporter("youtube.download", "youtube.postprocess")
 
@@ -1027,7 +1307,7 @@ def _build_ytdlp_video_options(abs_save_path, cookie_path=None, allow_playlist=F
             "AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/124.0.0.0 Safari/537.36"
         },
-        "ffmpeg_location": str(ffmpeg_dir) if ffmpeg_dir else "ffmpeg",
+        "ffmpeg_location": ffmpeg_location,
         "retries": 5,
         "fragment_retries": 5,
         "ignoreerrors": allow_playlist,
@@ -1038,9 +1318,7 @@ def _build_ytdlp_video_options(abs_save_path, cookie_path=None, allow_playlist=F
         "progress_hooks": [progress_hook],
         "postprocessor_hooks": [postprocessor_hook],
         "noplaylist": not allow_playlist,
-        "extractor_args": {
-            "youtube": {"player_client": ["web"]}
-        },
+        "extractor_args": _youtube_extractor_args("mweb"),
     }
     ydl_opts.update(_youtube_js_runtime_options())
 
@@ -1048,7 +1326,7 @@ def _build_ytdlp_video_options(abs_save_path, cookie_path=None, allow_playlist=F
 
 
 def _build_ytdlp_audio_playlist_options(abs_save_path, cookie_path=None, item_callback=None):
-    ffmpeg_dir = get_ffmpeg_dir()
+    ffmpeg_location = get_ytdlp_ffmpeg_location()
     downloaded_files = {}
     notified_ids = set()
     reporter = YtDlpProgressReporter("youtube.audio.download", "youtube.audio.postprocess")
@@ -1102,7 +1380,7 @@ def _build_ytdlp_audio_playlist_options(abs_save_path, cookie_path=None, item_ca
             "AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/124.0.0.0 Safari/537.36"
         },
-        "ffmpeg_location": str(ffmpeg_dir) if ffmpeg_dir else "ffmpeg",
+        "ffmpeg_location": ffmpeg_location,
         "retries": 5,
         "fragment_retries": 5,
         "ignoreerrors": True,
@@ -1119,9 +1397,7 @@ def _build_ytdlp_audio_playlist_options(abs_save_path, cookie_path=None, item_ca
             }
         ],
         "noplaylist": False,
-        "extractor_args": {
-            "youtube": {"player_client": ["web"]}
-        },
+        "extractor_args": _youtube_extractor_args("mweb"),
     }
     ydl_opts.update(_youtube_js_runtime_options())
 
@@ -1334,9 +1610,7 @@ def list_youtube_video_urls(url, cookie_path=None):
         "skip_download": True,
         "ignoreerrors": True,
         "noplaylist": False,
-        "extractor_args": {
-            "youtube": {"player_client": ["web"]}
-        },
+        "extractor_args": _youtube_extractor_args("mweb"),
     }
     ydl_opts.update(_youtube_js_runtime_options())
 
@@ -1417,9 +1691,7 @@ def fetch_channel_catalog(url, cookie_path=None):
         "skip_download": True,
         "ignoreerrors": True,
         "noplaylist": False,
-        "extractor_args": {
-            "youtube": {"player_client": ["web"]}
-        },
+        "extractor_args": _youtube_extractor_args("mweb"),
     }
     ydl_opts.update(_youtube_js_runtime_options())
 
@@ -1469,7 +1741,7 @@ def save_channel_catalog(url, save_dir, cookie_path=None):
     return catalog_path
 
 
-def download_audio_generic(url, save_path="downloads", codec="m4a", cookie_path=None):
+def download_audio_generic(url, save_path="downloads", codec="m4a", cookie_path=None, cookie_platform="youtube"):
     abs_save_path = os.path.abspath(save_path)
     os.makedirs(abs_save_path, exist_ok=True)
     existing_files = _iter_directory_files(abs_save_path)
@@ -1483,8 +1755,8 @@ def download_audio_generic(url, save_path="downloads", codec="m4a", cookie_path=
             cookie_path=resolve_cookie_file("instagram", cookie_path=cookie_path),
         )
 
-    ffmpeg_dir = get_ffmpeg_dir()
-    is_youtube = "youtube.com" in url or "youtu.be" in url
+    ffmpeg_location = get_ytdlp_ffmpeg_location()
+    is_youtube = cookie_platform == "youtube"
     final_file = []
     reporter = YtDlpProgressReporter("audio.download", "audio.postprocess")
 
@@ -1501,13 +1773,13 @@ def download_audio_generic(url, save_path="downloads", codec="m4a", cookie_path=
         "no_warnings": True,
         "logger": YtDlpMessageBridge("audio.engine"),
         "windowsfilenames": True,
-        "cookiefile": resolve_cookie_file("youtube", cookie_path=cookie_path) if is_youtube else resolve_cookie_file("youtube", cookie_path=cookie_path),
+        "cookiefile": resolve_cookie_file(cookie_platform, cookie_path=cookie_path),
         "http_headers": {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/124.0.0.0 Safari/537.36"
         },
-        "ffmpeg_location": str(ffmpeg_dir) if ffmpeg_dir else "ffmpeg",
+        "ffmpeg_location": ffmpeg_location,
         "retries": 5,
         "fragment_retries": 5,
         "format": "bestaudio[ext=m4a]/bestaudio/best",
@@ -1526,9 +1798,7 @@ def download_audio_generic(url, save_path="downloads", codec="m4a", cookie_path=
     }
 
     if is_youtube:
-        ydl_opts["extractor_args"] = {
-            "youtube": {"player_client": ["web"]}
-        }
+        ydl_opts["extractor_args"] = _youtube_extractor_args("mweb")
         ydl_opts.update(_youtube_js_runtime_options())
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -1689,7 +1959,7 @@ def _youtube_caption_language_candidates(info):
 def download_youtube_transcript_ytdlp(url, save_path, cookie_path=None):
     abs_save_path = os.path.abspath(save_path)
     os.makedirs(abs_save_path, exist_ok=True)
-    ffmpeg_dir = get_ffmpeg_dir()
+    ffmpeg_location = get_ytdlp_ffmpeg_location()
     existing_vtt_files = _find_vtt_files(abs_save_path)
 
     opts = {
@@ -1703,7 +1973,7 @@ def download_youtube_transcript_ytdlp(url, save_path, cookie_path=None):
             "AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/124.0.0.0 Safari/537.36"
         },
-        "ffmpeg_location": str(ffmpeg_dir) if ffmpeg_dir else "ffmpeg",
+        "ffmpeg_location": ffmpeg_location,
         "skip_download": True,
         "writesubtitles": True,
         "writeautomaticsub": True,
@@ -1712,11 +1982,8 @@ def download_youtube_transcript_ytdlp(url, save_path, cookie_path=None):
         "outtmpl": "%(title)s [%(id)s].%(ext)s",
         "ignoreerrors": True,
         "noplaylist": False,
-        "extractor_args": {
-            # The web client can return an image-only manifest for captions on
-            # some videos. Android reliably exposes the automatic-caption URLs.
-            "youtube": {"player_client": ["android"]}
-        },
+        # mweb is yt-dlp's recommended YouTube client for PO-token providers.
+        "extractor_args": _youtube_extractor_args("mweb"),
     }
     opts.update(_youtube_js_runtime_options())
 

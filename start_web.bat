@@ -1,8 +1,9 @@
 @echo off
 chcp 65001 >nul
+setlocal
+
 set "PROJ_DIR=%~dp0"
 set "PYTHON=%PROJ_DIR%.venv312\Scripts\python.exe"
-set "MCP_SCRIPT=%PROJ_DIR%mcp_server.py"
 set "TEXTFORGE_RUNTIME=windows"
 
-"%PYTHON%" "%MCP_SCRIPT%"
+"%PYTHON%" "%PROJ_DIR%start_web.py"

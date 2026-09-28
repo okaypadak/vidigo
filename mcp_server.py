@@ -22,6 +22,7 @@ from utils.video_downloader import (
 from utils.youtube_utils import extract_youtube_video_id
 from transcribers.whisper_transcriber import transcribe_whisper
 from utils.shutdown import install_sigint_exit_handler
+from utils.storage_paths import MEDIA_ROOT
 
 mcp = FastMCP(
     "textforge",
@@ -48,7 +49,6 @@ async def _run_streamable_http() -> None:
     asyncio.get_running_loop().set_exception_handler(_ignore_expected_windows_connection_reset)
     await mcp.run_streamable_http_async()
 
-MEDIA_ROOT = os.path.join(os.path.expanduser("~"), "textforge")
 DOWNLOAD_DIR = os.path.join(MEDIA_ROOT, "mcp_temp")
 TRANSCRIPT_DIR = os.path.join(MEDIA_ROOT, "transcript", "mcp")
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)

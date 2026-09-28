@@ -5,29 +5,14 @@ from utils.app_logging import log_exception, log_info
 from utils.file_utils import save_download_record, upsert_download_record, upsert_manifest_item
 from utils.video_downloader import (
     convert_items_to_audio,
-    download_instagram_profile_reels,
-    download_instagram_video,
-    download_youtube_playlist,
-    download_youtube_playlist_audio,
-    download_youtube_video,
-    extract_instagram_shortcode,
-    extract_instagram_username,
-    is_instagram_share_url,
-    is_instagram_url,
     resolve_cookie_file,
-    sanitize_filename,
 )
-from utils.youtube_utils import (
-    extract_youtube_channel_name,
-    extract_youtube_video_id,
-    is_youtube_channel_url,
-    is_youtube_playlist_url,
-    is_youtube_url,
-)
+from utils.media_platforms import classify_media_url, get_media_platform
+from utils.storage_paths import DOWNLOAD_ROOT
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DOWNLOAD_ROOT = os.path.join(BASE_DIR, "downloads")
-COOKIE_ROOT = os.path.join(os.path.expanduser("~"), "cookie")
+COOKIE_ROOT = os.path.abspath(os.path.expanduser(
+    os.environ.get("TEXTFORGE_COOKIE_ROOT", os.path.join("~", "cookie"))
+))
 logger = logging.getLogger(__name__)
 
 
@@ -35,24 +20,7 @@ def classify_download_url(url):
     normalized = (url or "").strip()
     if not normalized:
         raise ValueError("Bos URL indirilemez.")
-
-    if is_youtube_url(normalized):
-        if is_youtube_playlist_url(normalized):
-            return {"platform": "youtube", "source_type": "playlist", "url": normalized}
-        if is_youtube_channel_url(normalized):
-            return {"platform": "youtube", "source_type": "channel", "url": normalized}
-        if extract_youtube_video_id(normalized):
-            return {"platform": "youtube", "source_type": "video", "url": normalized}
-        raise ValueError("Gecerli bir YouTube video, playlist veya kanal URL'si girin.")
-
-    if is_instagram_url(normalized):
-        if extract_instagram_shortcode(normalized) or is_instagram_share_url(normalized):
-            return {"platform": "instagram", "source_type": "reel", "url": normalized}
-        if extract_instagram_username(normalized):
-            return {"platform": "instagram", "source_type": "profile_reels", "url": normalized}
-        raise ValueError("Instagram icin hesap URL'si veya reel URL'si girin.")
-
-    raise ValueError("Su anda sadece YouTube ve Instagram URL'leri destekleniyor.")
+    return classify_media_url(normalized)
 
 
 def _platform_download_dir(platform):
@@ -63,19 +31,8 @@ def _platform_download_dir(platform):
 
 
 def _source_download_dir(platform_dir, source_type, url):
-    if source_type == "channel":
-        channel_name = extract_youtube_channel_name(url)
-        if channel_name:
-            path = os.path.join(platform_dir, sanitize_filename(channel_name))
-            os.makedirs(path, exist_ok=True)
-            return path
-    if source_type == "profile_reels":
-        username = extract_instagram_username(url)
-        if username:
-            path = os.path.join(platform_dir, sanitize_filename(username))
-            os.makedirs(path, exist_ok=True)
-            return path
-    return platform_dir
+    request = classify_download_url(url)
+    return get_media_platform(request["platform"]).source_download_dir(platform_dir, source_type, url)
 
 
 def _single_result(platform, source_type, url, item, download_dir, downloader):
@@ -92,7 +49,8 @@ def _single_result(platform, source_type, url, item, download_dir, downloader):
     }
 
 
-def _persist_downloads(result):
+def persist_downloads(result):
+    """Write a normalized adapter result to the shared manifest and TinyDB stores."""
     if not result.get("items"):
         raise FileNotFoundError("Indirilebilir video bulunamadi.")
 
@@ -130,6 +88,9 @@ def _persist_downloads(result):
             file_path=item.get("file_path"),
             uploader=item.get("uploader"),
             downloader=downloader,
+            engine=item.get("engine"),
+            transcript=item.get("transcript"),
+            transcript_error=item.get("transcript_error"),
             manifest_path=manifest_path,
         )
         log_info(
@@ -170,14 +131,27 @@ def _convert_result_to_audio(result):
     return converted
 
 
-def download_media(url, cookie_path=None, audio_only=False, item_callback=None):
+def download_media(
+    url,
+    cookie_path=None,
+    audio_only=False,
+    item_callback=None,
+    persist=True,
+    target_download_dir=None,
+):
     request = classify_download_url(url)
     platform = request["platform"]
     source_type = request["source_type"]
+    platform_adapter = get_media_platform(platform)
     log_info(logger, "URL siniflandirildi", stage="download.classify", url=url, platform=platform, source_type=source_type)
     resolved_cookie = resolve_cookie_file(platform, cookie_path=cookie_path, cookie_dir=COOKIE_ROOT)
     platform_dir = _platform_download_dir(platform)
-    target_download_dir = _source_download_dir(platform_dir, source_type, url)
+    target_download_dir = (
+        os.path.abspath(target_download_dir)
+        if target_download_dir
+        else _source_download_dir(platform_dir, source_type, url)
+    )
+    os.makedirs(target_download_dir, exist_ok=True)
     log_info(
         logger,
         "Downloader secimi yapildi",
@@ -188,47 +162,20 @@ def download_media(url, cookie_path=None, audio_only=False, item_callback=None):
         download_dir=target_download_dir,
     )
 
-    if platform == "youtube":
-        if source_type in ("playlist", "channel"):
-            if audio_only:
-                log_info(logger, "YouTube playlist ses indirme basladi", stage="download.execute", url=url)
-                result = download_youtube_playlist_audio(
-                    url,
-                    save_path=target_download_dir,
-                    cookie_path=resolved_cookie,
-                    item_callback=item_callback,
-                )
-            else:
-                log_info(logger, "YouTube playlist indirme basladi", stage="download.execute", url=url)
-                result = download_youtube_playlist(url, save_path=target_download_dir, cookie_path=resolved_cookie)
-            result["source_type"] = source_type
-            if source_type == "channel":
-                channel_name = extract_youtube_channel_name(url)
-                if channel_name:
-                    result["source_name"] = channel_name
-            result["downloader"] = "yt-dlp+ffmpeg" if audio_only else "yt-dlp"
-        else:
-            log_info(logger, "YouTube video indirme basladi", stage="download.execute", url=url)
-            item = download_youtube_video(url, save_path=target_download_dir, cookie_path=resolved_cookie)
-            result = _single_result(platform, source_type, url, item, target_download_dir, "yt-dlp")
-    else:
-        if source_type == "profile_reels":
-            log_info(logger, "Instagram profil reels indirme basladi", stage="download.execute", url=url)
-            result = download_instagram_profile_reels(
-                url,
-                save_path=target_download_dir,
-                cookie_path=resolved_cookie,
-                audio_only=audio_only,
-                item_callback=item_callback,
-            )
-            result["downloader"] = "instaloader"
-        else:
-            log_info(logger, "Instagram reel indirme basladi", stage="download.execute", url=url)
-            item = download_instagram_video(url, save_path=target_download_dir, cookie_path=resolved_cookie)
-            result = _single_result(platform, source_type, url, item, target_download_dir, "instaloader")
+    log_info(logger, "Platform indiricisi calistiriliyor", stage="download.execute", platform=platform, source_type=source_type, url=url)
+    result = platform_adapter.download(
+        url,
+        save_path=target_download_dir,
+        cookie_path=resolved_cookie,
+        audio_only=audio_only,
+        item_callback=item_callback,
+    )
+    if "source_name" not in result:
+        item = (result.get("items") or [{}])[0]
+        result = _single_result(platform, source_type, url, item, target_download_dir, result["downloader"])
 
     result["cookie_file"] = resolved_cookie
-    if audio_only and not (platform == "instagram" and source_type == "profile_reels") and not (platform == "youtube" and source_type in ("playlist", "channel")):
+    if audio_only and not platform_adapter.converts_audio_during_download(source_type):
         log_info(
             logger,
             "Indirilen ogeler ses formatina donusturuluyor",
@@ -245,4 +192,4 @@ def download_media(url, cookie_path=None, audio_only=False, item_callback=None):
         source_name=result.get("source_name"),
         item_count=len(result.get("items", [])),
     )
-    return _persist_downloads(result)
+    return persist_downloads(result) if persist else result

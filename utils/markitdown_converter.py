@@ -1,9 +1,9 @@
 import os
 from datetime import datetime
 
+from utils.storage_paths import TRANSCRIPTS_ROOT
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MARKDOWN_OUTPUT_DIR = os.path.join(BASE_DIR, "transcripts", "markitdown")
+MARKDOWN_OUTPUT_DIR = os.path.join(TRANSCRIPTS_ROOT, "markitdown")
 
 AUDIO_VIDEO_EXTENSIONS = {
     ".aac",

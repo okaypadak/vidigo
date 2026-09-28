@@ -7,7 +7,11 @@ import time
 import uuid
 from datetime import datetime
 
+from dotenv import load_dotenv
 from flask import Flask, Response, jsonify, render_template, request, stream_with_context
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 from transcribers.whisper_transcriber import transcribe_whisper
 from utils.app_logging import (
@@ -19,18 +23,22 @@ from utils.app_logging import (
     log_info,
     log_warning,
 )
-from utils.download_service import COOKIE_ROOT, classify_download_url
+from utils.download_service import COOKIE_ROOT, classify_download_url, download_media, persist_downloads
+from utils.media_platforms import get_media_platform
 from utils.file_utils import load_download_history, save_download_record, save_output_transcript_to_file, save_transcript_to_file, upsert_download_record, upsert_manifest_item
 from utils.markitdown_converter import convert_file_to_markdown, save_markdown_output
+from utils.storage_paths import DOWNLOAD_ROOT, MEDIA_ROOT
 from utils.web_markdown import WebMarkdownUnavailableError, crawl_url_to_markdown, crawl_url_tree_to_markdown, save_web_markdown
+from utils.bgutil_provider import start_bgutil_provider
 from utils.shutdown import install_sigint_exit_handler
-from utils.video_downloader import build_unique_filepath, download_audio_generic, download_instagram_profile_reels, download_youtube_transcript_ytdlp, extract_instagram_shortcode, extract_instagram_username, list_youtube_video_urls, resolve_cookie_file, sanitize_filename, save_channel_catalog, strip_title_hashtags
+from utils.video_downloader import build_unique_filepath, download_youtube_transcript_ytdlp, extract_instagram_shortcode, extract_instagram_username, resolve_cookie_file, sanitize_directory_name, sanitize_filename, save_channel_catalog, strip_title_hashtags
 from utils.youtube_utils import extract_youtube_channel_name, extract_youtube_video_id
 
 app = Flask(__name__)
 
 TRANSCRIPT_DELAY_SECONDS = 3
 BULK_DOWNLOAD_DELAY_SECONDS = 10
+INSTAGRAM_RATE_LIMIT_RETRY_DELAY_SECONDS = 60
 
 # operation_id -> threading.Event; set() = iptal istendi
 _CANCEL_FLAGS: dict = {}
@@ -40,14 +48,12 @@ _CANCEL_FLAGS_LOCK = threading.Lock()
 _PROGRESS_STATES: dict = {}
 _PROGRESS_LOCK = threading.Lock()
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-UPLOAD_DIR = os.path.expanduser("~/")
 # Indirilen medya kullanicinin sabit TextForge klasorunde tutulur.
-AUDIO_DIR = os.path.join(UPLOAD_DIR, "textforge")
-DOWNLOAD_DIR = os.path.join(BASE_DIR, "downloads")
+AUDIO_DIR = MEDIA_ROOT
+DOWNLOAD_DIR = DOWNLOAD_ROOT
 MARKITDOWN_UPLOAD_DIR = os.path.join(DOWNLOAD_DIR, "markitdown_uploads")
 WEB_MARKDOWN_DIR = os.path.join(AUDIO_DIR, "web")
-LOG_DIR = os.path.join(UPLOAD_DIR, "textforge_logs")
+LOG_DIR = os.path.join(AUDIO_DIR, "logs")
 LOG_PATH = os.path.join(LOG_DIR, "app.log")
 
 os.makedirs(AUDIO_DIR, exist_ok=True)
@@ -95,7 +101,7 @@ def _get_operation_progress(operation_id):
 
 def _normalize_audio_path(downloaded_path, folder_name=None):
     current_dir = os.path.dirname(downloaded_path)
-    account_name = folder_name or _folder_name_from_path(downloaded_path) or "unknown"
+    account_name = sanitize_directory_name(folder_name or _folder_name_from_path(downloaded_path) or "unknown")
     target_dir = os.path.join(AUDIO_DIR, account_name, "ses")
     current_abs = os.path.abspath(current_dir)
     target_abs = os.path.abspath(target_dir)
@@ -117,7 +123,7 @@ def _normalize_audio_path(downloaded_path, folder_name=None):
 
 
 def _ytdlp_transcript_dir(source_name=None):
-    safe_name = sanitize_filename(source_name) if source_name else "unknown"
+    safe_name = sanitize_directory_name(source_name) if source_name else "unknown"
     path = os.path.join(AUDIO_DIR, safe_name, "transcript")
     os.makedirs(path, exist_ok=True)
     return path
@@ -126,7 +132,8 @@ def _ytdlp_transcript_dir(source_name=None):
 def _download_mp3(url, cookie_path=None, folder_name=None):
     os.makedirs(AUDIO_DIR, exist_ok=True)
     log_info(logger, "Ses dosyasi hazirlama basladi", stage="audio.prepare", url=url, target_root=AUDIO_DIR)
-    downloaded_path = download_audio_generic(url, save_path=AUDIO_DIR, cookie_path=cookie_path)
+    platform = get_media_platform(classify_download_url(url)["platform"])
+    downloaded_path = platform.download_audio(url, save_path=AUDIO_DIR, cookie_path=cookie_path)
     return _normalize_audio_path(downloaded_path, folder_name=folder_name)
 
 
@@ -142,6 +149,11 @@ def _whisper(dest_path):
         text_length=len(text),
     )
     return text
+
+
+def _is_instagram_rate_limit_error(error):
+    error_text = str(error).lower()
+    return "429" in error_text or "too many requests" in error_text
 
 
 def _video_name_from_path(path):
@@ -255,45 +267,10 @@ def _persist_downloaded_item(item, *, platform, source_type, source_name, source
     except Exception:
         log_exception(logger, "Transkript dosyasi kaydedilemedi", stage="batch.item.save", file_path=file_path)
 
-    manifest_path = None
-    try:
-        manifest_path, _ = upsert_manifest_item(
-            platform,
-            source_name,
-            source_type,
-            source_url,
-            item,
-            downloader=downloader,
-            download_dir=download_dir,
-            engine="whisper",
-        )
-        if manifest_path:
-            item["manifest_path"] = manifest_path
-    except Exception:
-        log_exception(logger, "Manifest guncellenemedi", stage="batch.item.manifest", file_path=file_path)
-
-    try:
-        upsert_download_record(
-            video_name=_video_name_from_path(file_path),
-            transcript=text,
-            platform=platform,
-            source_type=source_type,
-            source_name=source_name,
-            source_url=source_url,
-            engine="whisper",
-            url=item_url,
-            video_id=video_id,
-            shortcode=item.get("shortcode"),
-            file_name=os.path.basename(file_path),
-            file_path=file_path,
-            uploader=item.get("uploader"),
-            downloader=downloader,
-            manifest_path=manifest_path,
-        )
-    except Exception:
-        log_exception(logger, "TinyDB kaydi guncellenemedi", stage="batch.item.db", file_path=file_path)
-
-    return manifest_path
+    # The profile pipeline persists every item only after transcription and
+    # optional audio cleanup.  This prevents stale file paths or partial
+    # records before the shared persistence stage completes.
+    return None
 
 
 def _transcribe_downloaded_audio(platform, dest_path, url, video_id):
@@ -484,8 +461,16 @@ def _process_audio_item(url, *, cookie_path=None, mode="download", source_type=N
                     engine = "ytdlp_subtitle"
                     log_info(logger, "yt-dlp altyazi ile transcript alindi", stage="transcribe.item", video_id=video_id)
                 except Exception as exc:
-                    engine = "error"
-                    log_warning(logger, "yt-dlp altyazi ile transcript alinamadi, atlaniyor", stage="transcribe.item", url=url, error=str(exc), error_type=type(exc).__name__)
+                    log_warning(logger, "yt-dlp altyazi ile transcript alinamadi, Whisper'a geciliyor", stage="transcribe.item", url=url, error=str(exc), error_type=type(exc).__name__)
+                    try:
+                        text = _whisper(dest_path)
+                        engine = "whisper"
+                        log_info(logger, "YouTube transkripti Whisper ile alindi", stage="transcribe.item", video_id=video_id)
+                    except Exception as whisper_exc:
+                        transcript_error = f"Whisper hatasi: {str(whisper_exc)}"
+                        engine = "error"
+                        text = transcript_error
+                        log_exception(logger, "YouTube Whisper transkripsiyonu basarisiz oldu", stage="transcribe.item", url=url, audio_path=dest_path)
         else:
             try:
                 engine, text, transcript_payload = _transcribe_downloaded_audio(platform, dest_path, url, video_id)
@@ -520,6 +505,9 @@ def _process_audio_item(url, *, cookie_path=None, mode="download", source_type=N
     if audio_removed:
         item["audio_removed"] = True
         item["removed_file_path"] = dest_path
+
+    if transcript_enabled and transcript_error:
+        raise RuntimeError(transcript_error)
 
     if transcript_enabled and text and not (platform == "youtube" and engine == "ytdlp_subtitle" and transcript_payload):
         _persist_transcript(
@@ -570,10 +558,9 @@ def _process_audio_item(url, *, cookie_path=None, mode="download", source_type=N
 
 def _expand_source_items(url, cookie_path=None):
     request = classify_download_url(url)
-    if request["platform"] == "youtube" and request["source_type"] in {"playlist", "channel"}:
-        resolved_cookie = resolve_cookie_file("youtube", cookie_path=cookie_path, cookie_dir=COOKIE_ROOT)
-        return request, list_youtube_video_urls(url, cookie_path=resolved_cookie)
-    return request, [{"url": url}]
+    platform = get_media_platform(request["platform"])
+    resolved_cookie = resolve_cookie_file(request["platform"], cookie_path=cookie_path, cookie_dir=COOKIE_ROOT)
+    return request, platform.expand_source_items(url, cookie_path=resolved_cookie)
 
 
 def _attach_item_transcripts(result):
@@ -592,10 +579,12 @@ def _attach_item_transcripts(result):
     download_dir = result.get("download_dir")
     transcript_count = 0
 
+    failures = []
     for item in items:
         file_path = item.get("file_path")
         if not file_path or not os.path.isfile(file_path):
             item["transcript_error"] = "Ses dosyasi bulunamadi."
+            failures.append(item["transcript_error"])
             continue
 
         if item.get("transcript") and item.get("engine"):
@@ -614,12 +603,19 @@ def _attach_item_transcripts(result):
                 download_dir=download_dir,
                 downloader=downloader,
             )
+            if item.get("transcript_error") or not item.get("transcript"):
+                failures.append(item.get("transcript_error") or "Whisper transkripsiyonu metin uretmedi.")
+                continue
             transcript_count += 1
             if manifest_path:
                 result["manifest_path"] = manifest_path
         except Exception:
             log_exception(logger, "Batch item persistence beklenmeyen hata verdi", stage="batch.item.persist", file_path=file_path)
+            failures.append(item.get("transcript_error") or "Whisper transkripsiyonu basarisiz oldu.")
             continue
+
+    if failures:
+        raise RuntimeError("Instagram ogeleri ortak ses/transkript zincirini tamamlayamadi: " + failures[0])
 
     result["transcribed_count"] = transcript_count
     if transcript_count:
@@ -651,23 +647,29 @@ def _already_downloaded(video_id, mode):
 
 def _instagram_profile_payload(url, cookie_path=None, mode="download"):
     transcript_enabled = mode in {"download", "transcript_only"}
-    keep_audio = mode in {"download", "mp3_only"}
-    audio_only = mode in {"mp3_only", "transcript_only"}
+    # Instagram transcript-only requests retain the generated M4A under the
+    # account's ``ses`` directory for subsequent use.
+    keep_audio = mode in {"download", "mp3_only", "transcript_only"}
+    # Profiles must follow the same media pipeline as a single Instagram URL:
+    # Instagrapi MP4 -> shared FFmpeg M4A -> Whisper (when requested).
+    audio_only = True
 
     resolved_cookie = resolve_cookie_file("instagram", cookie_path=cookie_path, cookie_dir=COOKIE_ROOT)
     username = extract_instagram_username(url)
-    account_save_dir = os.path.join(AUDIO_DIR, sanitize_filename(username)) if username else AUDIO_DIR
+    account_dir = os.path.join(AUDIO_DIR, sanitize_directory_name(username)) if username else AUDIO_DIR
+    target_download_dir = os.path.join(account_dir, "ses") if audio_only else account_dir
 
     log_info(logger, "Instagram profil indirme akisi basladi", stage="instagram.profile.pipeline", url=url, username=username or "?", mode=mode)
 
-    result = download_instagram_profile_reels(
+    # Keep adapter download, FFmpeg conversion, and persistence in the shared
+    # service; only attach Whisper output after the M4A exists.
+    result = download_media(
         url,
-        save_path=account_save_dir,
         cookie_path=resolved_cookie,
         audio_only=audio_only,
+        persist=False,
+        target_download_dir=target_download_dir,
     )
-    result["downloader"] = "instaloader"
-
     if transcript_enabled:
         result = _attach_item_transcripts(result)
 
@@ -684,6 +686,8 @@ def _instagram_profile_payload(url, cookie_path=None, mode="download"):
                 except OSError:
                     log_warning(logger, "Ses dosyasi silinemedi", stage="instagram.profile.pipeline", file_path=file_path)
 
+    result = persist_downloads(result)
+
     items = result.get("items", [])
     transcribed = sum(1 for i in items if i.get("transcript"))
 
@@ -695,7 +699,7 @@ def _instagram_profile_payload(url, cookie_path=None, mode="download"):
         "download_dir": result.get("download_dir"),
         "manifest_path": result.get("manifest_path"),
         "cookie_file": resolved_cookie,
-        "downloader": "instaloader+whisper" if transcript_enabled else "instaloader",
+        "downloader": "instagrapi+whisper" if transcript_enabled else "instagrapi",
         "engine": "whisper" if transcript_enabled else None,
         "item_count": len(items),
         "transcribed_count": transcribed,
@@ -720,7 +724,7 @@ def _single_audio_payload(url, cookie_path=None, mode="download", cancel_event=N
 
     if request["platform"] == "youtube" and request["source_type"] == "channel" and source_name:
         try:
-            channel_dir = os.path.join(DOWNLOAD_DIR, "youtube", sanitize_filename(source_name))
+            channel_dir = os.path.join(DOWNLOAD_DIR, "youtube", sanitize_directory_name(source_name))
             resolved_cookie = resolve_cookie_file("youtube", cookie_path=cookie_path, cookie_dir=COOKIE_ROOT)
             save_channel_catalog(url, channel_dir, cookie_path=resolved_cookie)
         except Exception:
@@ -782,10 +786,7 @@ def _single_audio_payload(url, cookie_path=None, mode="download", cancel_event=N
         # Zaten indirilmisse atla
         video_id = source_item.get("video_id")
         if not video_id:
-            if request["platform"] == "youtube":
-                video_id = extract_youtube_video_id(item_url)
-            else:
-                video_id = extract_instagram_shortcode(item_url)
+            video_id = get_media_platform(request["platform"]).item_identifier(item_url)
         # Transkript istegi her seferinde medya dosyasini yeniden hazirlar. Eski bir
         # TinyDB kaydi metin iceriyor olsa bile kullanicinin diskte bekledigi medya
         # dosyasi kalmamis olabilir.
@@ -1240,7 +1241,8 @@ def instagram_transcribe():
     try:
         with bind_operation(operation_id):
             log_info(logger, "Instagram transkripsiyon istegi alindi", stage="request.accepted", url=url)
-            dest_path = _download_mp3(url)
+            item, _, _ = _process_audio_item(url, mode="transcript_only")
+            dest_path = item.get("file_path")
     except Exception as exc:
         with bind_operation(operation_id):
             log_exception(logger, "Instagram icin ses hazirlama basarisiz oldu", stage="request.failed", url=url)
@@ -1248,10 +1250,8 @@ def instagram_transcribe():
 
     try:
         with bind_operation(operation_id):
-            text = _whisper(dest_path)
-            _persist_transcript(dest_path, url, "instagram", "whisper", text)
-            log_info(logger, "Instagram transkripsiyonu tamamlandi", stage="request.completed", audio_path=dest_path)
-            return _json_response({"status": "success", "engine": "whisper", "text": text}, operation_id=operation_id)
+            log_info(logger, "Instagram transkripsiyonu tamamlandi", stage="request.completed", audio_path=item.get("file_path"))
+            return _json_response({"status": "success", "engine": item.get("engine"), "text": item.get("transcript"), "file_path": item.get("file_path")}, operation_id=operation_id)
     except Exception as exc:
         with bind_operation(operation_id):
             log_exception(logger, "Instagram Whisper transkripsiyonu basarisiz oldu", stage="request.failed", audio_path=dest_path)
@@ -1272,15 +1272,13 @@ def youtube_transcribe():
     try:
         with bind_operation(operation_id):
             log_info(logger, "YouTube transkripsiyon istegi alindi", stage="request.accepted", url=url, video_id=video_id)
-            resolved_cookie = resolve_cookie_file("youtube", cookie_path=cookie_path, cookie_dir=COOKIE_ROOT)
-            transcript_dir = _ytdlp_transcript_dir(extract_youtube_channel_name(url) or video_id)
-            item, text = _youtube_subtitle_transcript(url, transcript_dir, cookie_path=resolved_cookie)
-            log_info(logger, "yt-dlp altyazi ile YouTube transkripti bulundu", stage="request.completed", video_id=video_id)
-            return _json_response({"status": "success", "engine": "ytdlp_subtitle", "text": text, "file_path": item.get("file_path")}, operation_id=operation_id)
+            item, _, _ = _process_audio_item(url, cookie_path=cookie_path, mode="transcript_only")
+            log_info(logger, "YouTube transkripsiyonu tamamlandi", stage="request.completed", video_id=video_id, engine=item.get("engine"))
+            return _json_response({"status": "success", "engine": item.get("engine"), "text": item.get("transcript"), "file_path": item.get("file_path")}, operation_id=operation_id)
     except Exception as exc:
         with bind_operation(operation_id):
-            log_exception(logger, "yt-dlp YouTube altyazi transkripsiyonu basarisiz oldu", stage="youtube.transcript", video_id=video_id)
-        return _json_response({"error": f"YouTube altyazi hatasi: {str(exc)}"}, status=502, operation_id=operation_id)
+            log_exception(logger, "YouTube transkripsiyonu basarisiz oldu", stage="youtube.transcript", video_id=video_id)
+        return _json_response({"error": f"YouTube transkript hatasi: {str(exc)}"}, status=502, operation_id=operation_id)
 
 
 @app.route("/batch_transcribe", methods=["POST"])
@@ -1289,6 +1287,7 @@ def batch_transcribe():
     data = request.get_json(silent=True) or {}
     urls = data.get("urls", [])
     profile = data.get("profile", "")
+    cookie_path = (data.get("cookie_path") or "").strip() or None
 
     if not urls:
         return _json_response({"error": "URL listesi bos."}, status=400, operation_id=operation_id)
@@ -1312,35 +1311,44 @@ def batch_transcribe():
             }
             log_info(logger, "Toplu transkripsiyon girdisi isleniyor", stage="batch.item.start", index=index, total=len(urls), url=url, platform=platform)
 
-            if platform == "instagram":
-                try:
-                    dest_path = _download_mp3(url)
-                except Exception as exc:
-                    entry["error"] = f"Indirme hatasi: {str(exc)}"
-                    log_exception(logger, "Toplu transkripsiyon icin ses hazirlama basarisiz oldu", stage="batch.item.download", url=url)
-                    results.append(entry)
-                    continue
-                try:
-                    entry["text"] = _whisper(dest_path)
-                    entry["engine"] = "whisper"
-                    entry["status"] = "success"
-                    _persist_transcript(dest_path, url, platform, entry["engine"], entry["text"])
-                except Exception as exc:
-                    entry["error"] = f"Whisper hatasi: {str(exc)}"
-                    log_exception(logger, "Instagram batch Whisper basarisiz oldu", stage="batch.item.transcribe", url=url, audio_path=dest_path)
-            else:
-                video_id = extract_youtube_video_id(url)
-                if video_id:
+            if results:
+                log_info(
+                    logger,
+                    "Toplu indirme sonrasi bekleme uygulaniyor",
+                    stage="batch.item.wait",
+                    index=index,
+                    delay_seconds=BULK_DOWNLOAD_DELAY_SECONDS,
+                    platform=platform,
+                )
+                time.sleep(BULK_DOWNLOAD_DELAY_SECONDS)
+
+            try:
+                item, _, _ = _process_audio_item(url, cookie_path=cookie_path, mode="transcript_only")
+                entry["text"] = item.get("transcript")
+                entry["engine"] = item.get("engine")
+                entry["status"] = "success"
+            except Exception as exc:
+                if platform == "instagram" and _is_instagram_rate_limit_error(exc):
+                    log_warning(
+                        logger,
+                        "Instagram hiz siniri alindi; ayni oge bir kez daha denenecek",
+                        stage="batch.item.rate_limit",
+                        index=index,
+                        url=url,
+                        retry_delay_seconds=INSTAGRAM_RATE_LIMIT_RETRY_DELAY_SECONDS,
+                    )
+                    time.sleep(INSTAGRAM_RATE_LIMIT_RETRY_DELAY_SECONDS)
                     try:
-                        resolved_cookie = resolve_cookie_file("youtube", cookie_dir=COOKIE_ROOT)
-                        transcript_dir = _ytdlp_transcript_dir(extract_youtube_channel_name(url) or video_id)
-                        transcript, text = _youtube_subtitle_transcript(url, transcript_dir, cookie_path=resolved_cookie)
-                        entry["text"] = text
-                        entry["engine"] = "ytdlp_subtitle"
+                        item, _, _ = _process_audio_item(url, cookie_path=cookie_path, mode="transcript_only")
+                        entry["text"] = item.get("transcript")
+                        entry["engine"] = item.get("engine")
                         entry["status"] = "success"
-                    except Exception as exc:
-                        entry["error"] = f"YouTube altyazi hatasi: {str(exc)}"
-                        log_exception(logger, "Batch yt-dlp YouTube altyazi islemi basarisiz oldu", stage="batch.item.youtube_subtitle", video_id=video_id, url=url)
+                    except Exception as retry_exc:
+                        entry["error"] = f"Indirme hatasi: {str(retry_exc)}"
+                        log_exception(logger, "Instagram toplu indirme tekrar denemede basarisiz oldu", stage="batch.item.retry_failed", url=url)
+                else:
+                    entry["error"] = f"Transkript hatasi: {str(exc)}"
+                    log_exception(logger, "Toplu transkripsiyon basarisiz oldu", stage="batch.item.failed", url=url, platform=platform)
 
             results.append(entry)
             log_info(
@@ -1371,6 +1379,8 @@ if __name__ == "__main__":
     debug_enabled = os.environ.get("TEXTFORGE_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
     host = os.environ.get("TEXTFORGE_HOST", "127.0.0.1")
     port = int(os.environ.get("TEXTFORGE_PORT", "5000"))
+    if not debug_enabled or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+        start_bgutil_provider()
     log_info(
         logger,
         "Flask sunucusu baslatiliyor",
