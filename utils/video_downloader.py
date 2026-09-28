@@ -409,7 +409,8 @@ def _find_existing_instagram_file(directory, target, shortcode, audio_only=False
         file_stem, extension = os.path.splitext(filename)
         if extension.lower() not in extensions:
             continue
-        if file_stem == stem or file_stem.startswith(f"{stem} ("):
+        caption_name = re.search(rf" \[{re.escape(str(shortcode))}\](?: \(\d+\))?$", file_stem)
+        if file_stem == stem or file_stem.startswith(f"{stem} (") or caption_name:
             return os.path.abspath(path)
     return None
 
@@ -1108,12 +1109,23 @@ def _authenticate_instagrapi_client(client, cookie_path):
 def _instagrapi_item(media, file_path, username):
     shortcode = str(getattr(media, "code", "") or getattr(media, "pk", ""))
     caption = str(getattr(media, "caption_text", "") or "").strip()
+    title = re.sub(r"\s+", " ", caption).strip()[:120] if caption else f"{username}_{shortcode}"
+    safe_title = sanitize_filename(re.sub(r"[\x00-\x1f\x7f]", " ", title)).strip(". ")
+    filename_stem = f"{safe_title} [{shortcode}]" if caption else f"{username}_{shortcode}"
+    file_path = os.path.abspath(file_path)
+    current_stem, extension = os.path.splitext(os.path.basename(file_path))
+    if current_stem != filename_stem and not re.fullmatch(
+        rf"{re.escape(filename_stem)} \(\d+\)", current_stem
+    ):
+        renamed_path = build_unique_filepath(os.path.dirname(file_path), filename_stem, extension)
+        os.rename(file_path, renamed_path)
+        file_path = renamed_path
     created_at = getattr(media, "taken_at", None)
     return {
         "id": shortcode,
         "shortcode": shortcode,
         "video_id": shortcode,
-        "title": caption.splitlines()[0][:120] if caption else f"{username}_{shortcode}",
+        "title": title,
         "caption": caption,
         "uploader": username,
         "platform": "instagram",
@@ -1191,7 +1203,7 @@ def download_instagram_profile_reels_instagrapi(
             item = _instagrapi_item(media, item_path, username)
             items.append(item)
             log_info(logger, "Instagram reel sonraki asama icin hazir", stage="instagram.instagrapi",
-                     index=index, total=len(reels), file_path=str(item_path))
+                     index=index, total=len(reels), file_path=item["file_path"])
             if item_callback:
                 item_callback(item, platform="instagram", source_type="profile_reels", source_name=username,
                               source_url=f"https://www.instagram.com/{username}/", download_dir=account_dir,
