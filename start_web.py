@@ -31,7 +31,7 @@ from utils.storage_paths import DOWNLOAD_ROOT, MEDIA_ROOT
 from utils.web_markdown import WebMarkdownUnavailableError, crawl_url_to_markdown, crawl_url_tree_to_markdown, save_web_markdown
 from utils.bgutil_provider import start_bgutil_provider
 from utils.shutdown import install_sigint_exit_handler
-from utils.video_downloader import build_unique_filepath, download_youtube_transcript_ytdlp, extract_instagram_shortcode, extract_instagram_username, resolve_cookie_file, sanitize_directory_name, sanitize_filename, save_channel_catalog, strip_title_hashtags
+from utils.video_downloader import build_unique_filepath, download_instagram_profile_reels_instagrapi, download_youtube_transcript_ytdlp, extract_instagram_shortcode, extract_instagram_username, resolve_cookie_file, sanitize_directory_name, sanitize_filename, save_channel_catalog, strip_title_hashtags
 from utils.youtube_utils import extract_youtube_channel_name, extract_youtube_video_id
 
 app = Flask(__name__)
@@ -637,10 +637,10 @@ def _already_downloaded(video_id, mode):
     needs_transcript = mode in {"download", "transcript_only"}
     if needs_audio:
         file_path = record.get("file_path")
-        if not file_path or not os.path.isfile(file_path):
+        if not file_path or not os.path.isfile(file_path) or os.path.splitext(file_path)[1].lower() != ".m4a":
             return False
     if needs_transcript:
-        if not record.get("transcript") and record.get("engine") != "error" and not record.get("transcript_error"):
+        if not record.get("transcript") or record.get("engine") == "error" or record.get("transcript_error"):
             return False
     return True
 
@@ -657,21 +657,56 @@ def _instagram_profile_payload(url, cookie_path=None, mode="download"):
     resolved_cookie = resolve_cookie_file("instagram", cookie_path=cookie_path, cookie_dir=COOKIE_ROOT)
     username = extract_instagram_username(url)
     account_dir = os.path.join(AUDIO_DIR, sanitize_directory_name(username)) if username else AUDIO_DIR
-    target_download_dir = os.path.join(account_dir, "ses") if audio_only else account_dir
+    audio_dir = os.path.join(account_dir, "ses")
 
     log_info(logger, "Instagram profil indirme akisi basladi", stage="instagram.profile.pipeline", url=url, username=username or "?", mode=mode)
 
-    # Keep adapter download, FFmpeg conversion, and persistence in the shared
-    # service; only attach Whisper output after the M4A exists.
-    result = download_media(
+    operation_id = get_operation_id()
+    downloaded_count = 0
+    _set_operation_progress(operation_id, active=True, status="downloading", mode=mode,
+                            current_title="Her reel: MP4 -> M4A -> transkript sirasi ile islenecek")
+
+    def on_profile_video(item, **metadata):
+        nonlocal downloaded_count
+        downloaded_count = metadata.get("index") or downloaded_count + 1
+        total = metadata.get("total") or downloaded_count
+        _set_operation_progress(operation_id, active=True, status="downloading",
+                                total_count=total, current_index=downloaded_count,
+                                current_title=item.get("title") or "",
+                                current_url=item.get("webpage_url") or url)
+        if transcript_enabled:
+            _set_operation_progress(operation_id, active=True, status="transcribing",
+                                    total_count=total, current_index=downloaded_count,
+                                    current_title=item.get("title") or "")
+            _persist_downloaded_item(
+                item,
+                platform="instagram",
+                source_type="profile_reels",
+                source_name=username or "instagram",
+                source_url=url,
+                download_dir=audio_dir,
+                downloader="instagrapi+ffmpeg",
+            )
+            if item.get("transcript_error"):
+                raise RuntimeError(item["transcript_error"])
+        _set_operation_progress(operation_id, active=True, status="downloaded",
+                                total_count=total, current_index=downloaded_count,
+                                completed_count=downloaded_count, processed_count=downloaded_count,
+                                current_title=item.get("title") or "")
+
+    # Instagrapi writes each temporary MP4 into the account folder.  The same
+    # iteration then converts it under ``ses`` and invokes Whisper before the
+    # next reel starts.
+    result = download_instagram_profile_reels_instagrapi(
         url,
+        save_path=account_dir,
         cookie_path=resolved_cookie,
         audio_only=audio_only,
-        persist=False,
-        target_download_dir=target_download_dir,
+        item_callback=on_profile_video,
+        audio_output_dir=audio_dir,
     )
-    if transcript_enabled:
-        result = _attach_item_transcripts(result)
+    if transcript_enabled and result.get("errors"):
+        raise RuntimeError(result["errors"][0].get("error") or "Instagram reel transkripti olusturulamadi.")
 
     if not keep_audio:
         for item in result.get("items", []):

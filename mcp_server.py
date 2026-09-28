@@ -22,6 +22,7 @@ from utils.video_downloader import (
 from utils.youtube_utils import extract_youtube_video_id
 from transcribers.whisper_transcriber import transcribe_whisper
 from utils.shutdown import install_sigint_exit_handler
+from utils.bgutil_provider import start_bgutil_provider
 from utils.storage_paths import MEDIA_ROOT
 
 mcp = FastMCP(
@@ -243,6 +244,7 @@ def _run_cli() -> int:
 
 if __name__ == "__main__":
     install_sigint_exit_handler()
+    start_bgutil_provider()
     if len(sys.argv) > 1:
         raise SystemExit(_run_cli())
     mcp.run(transport="stdio")

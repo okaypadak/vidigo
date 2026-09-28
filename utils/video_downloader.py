@@ -15,6 +15,7 @@ import yt_dlp
 
 from utils.app_logging import log_exception, log_info, log_warning
 from utils.ffmpeg_utils import get_ffmpeg_binary, get_ytdlp_ffmpeg_location
+from utils.runtime_environment import is_container, is_windows
 from utils.youtube_utils import extract_youtube_playlist_id
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".mkv"}
@@ -131,9 +132,11 @@ def _youtube_js_runtime_options():
 
 
 def _youtube_extractor_args(player_client):
-    """Build YouTube arguments, including an explicitly configured POT provider."""
+    """Build YouTube arguments, enabling the managed BgUtil provider when supported."""
     extractor_args = {"youtube": {"player_client": [player_client]}}
-    pot_provider_url = os.environ.get("TEXTFORGE_BGUTIL_BASE_URL", "").strip().rstrip("/")
+    pot_provider_url = ""
+    if is_container() or is_windows():
+        pot_provider_url = os.environ.get("TEXTFORGE_BGUTIL_BASE_URL", "").strip().rstrip("/")
     if pot_provider_url:
         extractor_args["youtubepot-bgutilhttp"] = {"base_url": [pot_provider_url]}
     return extractor_args
@@ -664,6 +667,10 @@ def _instagram_profile_reels_iterator(loader, profile, username):
 
 
 def _extract_audio_to_m4a(video_path, audio_path):
+    # Instagrapi returns pathlib.WindowsPath values on Windows.  FFmpeg and
+    # the structured log command both require ordinary string arguments.
+    video_path = os.fspath(video_path)
+    audio_path = os.fspath(audio_path)
     ffmpeg_bin = get_ffmpeg_binary()
     if not ffmpeg_bin:
         raise FileNotFoundError("FFmpeg bulunamadi. Windows'ta ffmpeg\\ffmpeg.exe veya PATH'i, konteynerde /usr/bin/ffmpeg beklenir.")
@@ -1121,7 +1128,14 @@ def _instagrapi_item(media, file_path, username):
     }
 
 
-def download_instagram_profile_reels_instagrapi(url, save_path="downloads", cookie_path=None, audio_only=False, item_callback=None):
+def download_instagram_profile_reels_instagrapi(
+    url,
+    save_path="downloads",
+    cookie_path=None,
+    audio_only=False,
+    item_callback=None,
+    audio_output_dir=None,
+):
     """Download a profile's Reels through Instagrapi's authenticated clips API."""
     username = extract_instagram_username(url)
     if not username:
@@ -1149,28 +1163,39 @@ def download_instagram_profile_reels_instagrapi(url, save_path="downloads", cook
     if not reels:
         raise FileNotFoundError("Instagram profilinde indirilebilir reel bulunamadi veya reels listesi bos dondu.")
 
+    log_info(logger, "Profil reels listesi hazir; her reel sirasiyla islenecek",
+             stage="instagram.instagrapi", username=username, total=len(reels))
     items = []
     errors = []
     for index, media in enumerate(reels, start=1):
         shortcode = str(getattr(media, "code", "") or getattr(media, "pk", index))
         existing_file = _find_existing_instagram_file(account_dir, username, shortcode, audio_only=audio_only)
+        if not existing_file and not audio_only:
+            # Instagrapi names clips with the numeric media PK, not the shortcode.
+            existing_file = _find_existing_instagram_file(account_dir, username, str(media.pk))
         try:
+            log_info(logger, "Instagram reel hazirlaniyor", stage="instagram.instagrapi",
+                     index=index, total=len(reels), shortcode=shortcode, reused=bool(existing_file))
             video_path = existing_file or client.clip_download(int(media.pk), folder=account_dir)
             if not video_path or not os.path.isfile(video_path):
                 raise FileNotFoundError("Instagrapi reel video dosyasini indirmedi.")
             item_path = video_path
             if audio_only:
                 stem = os.path.splitext(os.path.basename(video_path))[0]
-                item_path = build_unique_filepath(os.path.dirname(video_path), stem, ".m4a")
+                output_dir = os.path.abspath(audio_output_dir or os.path.dirname(video_path))
+                os.makedirs(output_dir, exist_ok=True)
+                item_path = build_unique_filepath(output_dir, stem, ".m4a")
                 _extract_audio_to_m4a(video_path, item_path)
                 if not existing_file:
                     os.remove(video_path)
             item = _instagrapi_item(media, item_path, username)
             items.append(item)
+            log_info(logger, "Instagram reel sonraki asama icin hazir", stage="instagram.instagrapi",
+                     index=index, total=len(reels), file_path=str(item_path))
             if item_callback:
                 item_callback(item, platform="instagram", source_type="profile_reels", source_name=username,
                               source_url=f"https://www.instagram.com/{username}/", download_dir=account_dir,
-                              downloader="instagrapi")
+                              downloader="instagrapi+ffmpeg", index=index, total=len(reels))
         except Exception as exc:
             errors.append({"shortcode": shortcode, "stage": "download", "error": str(exc)})
             log_warning(logger, "Instagrapi reel indirilemedi", stage="instagram.instagrapi", username=username,

@@ -8,7 +8,10 @@
 
 - Instagram post, reel, profil reels ve ses indirme akışlarında yalnızca `instagrapi` kullanılır.
 - Cookie gerekirse yalnızca `~/cookie/instagram.txt` çözülür ve Instagrapi oturumuna yüklenir.
-- Akış değişmez: `Instagrapi → MP4 → ffmpeg ile M4A → Whisper → transcript`.
+- Instagrapi bir ses veya transkript indiricisi değildir; yalnız kaynak MP4'ü indirir. MP4, sonraki aşama için geçici girdidir.
+- Tekil post/Reel akışı `download_instagram_video` ile MP4 indirir; `download_instagram_audio` bu MP4'ten ortak FFmpeg aşamasıyla M4A üretir ve geçici MP4'ü siler. Profil Reel akışı da önce tüm MP4'leri indirir, sonra `download_media(..., audio_only=True)` içindeki ortak `convert_items_to_audio` aşaması her birini M4A'ya çevirip MP4'leri siler.
+- Transkript istenen akışın sırası değişmez: `Instagrapi → MP4 → ffmpeg ile M4A → Whisper → transcript`. Whisper yalnız oluşturulmuş M4A üzerinde çalışır; Instagrapi sonucundan doğrudan transkript üretilmez.
+- Modların çıktısı ayrıdır: `mp3_only` yalnız kalıcı M4A indirir; `download` kalıcı M4A ve Whisper transkripti üretir; `transcript_only` de M4A'yı kalıcı tutar ve Whisper transkripti üretir. Post/Reel ve profil Reel için bu ayrım korunur.
 - `instaloader`, `yt-dlp`, Selenium, `undetected-chromedriver`, tarayıcı otomasyonu veya başka bir Instagram indirme kütüphanesi eklenmez ya da kullanılmaz.
 - Birincil akış başarısız olduğunda farklı bir kütüphaneye, servise veya indirme yöntemine fallback uygulanmaz. Hata kullanıcıya açıkça döndürülür.
 - Instagram için `transcript_only` isteğinde M4A dosyası `C:\Users\<kullanıcı>\textforge\<hesap>\ses\` altında tutulur; önceki TinyDB kaydı bu isteği atlatmaz.

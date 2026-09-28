@@ -12,7 +12,7 @@ from urllib.error import URLError
 from urllib.parse import urlparse
 from urllib.request import urlopen
 
-from utils.runtime_environment import is_container
+from utils.runtime_environment import is_container, is_windows
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +40,8 @@ def _provider_server_home() -> Path:
     configured_home = os.environ.get("TEXTFORGE_BGUTIL_SERVER_HOME", "").strip()
     if configured_home:
         return Path(configured_home)
+    if is_windows():
+        return Path.home() / "bgutil-ytdlp-pot-provider" / "server"
     return Path(__file__).resolve().parents[1] / "vendor" / "bgutil-provider"
 
 
@@ -70,14 +72,15 @@ def _stop_provider() -> None:
 def start_bgutil_provider() -> bool:
     """Gömülü HTTP sağlayıcısını başlatır ve yt-dlp'ye loopback URL'sini verir.
 
-    Sağlayıcı yalnız Docker imajında paketlenir. Yerel Windows uygulaması harici
-    Docker imajına ya da yerel bir BgUtil sunucusuna bağlanmaz.
+    Sağlayıcı Docker'da gömülü paketten, Windows'ta ise kullanıcının yerel
+    ``~/bgutil-ytdlp-pot-provider/server`` kurulumundan çalışır. Her iki
+    durumda da yalnız loopback adresine bağlanır.
     """
 
     global _provider_process
 
-    if not is_container():
-        logger.info("BgUtil yalniz TextForge konteynerinde calistirilir; Windows yerel calismada atlandi.")
+    if not (is_container() or is_windows()):
+        logger.info("BgUtil bu yerel calisma ortaminda desteklenmiyor; atlandi.")
         return False
 
     base_url = _provider_base_url()
@@ -91,7 +94,7 @@ def start_bgutil_provider() -> bool:
         node_binary = shutil.which("node")
         if not node_binary or not main_script.is_file():
             raise RuntimeError(
-                "Konteynerde gomulu BgUtil saglayicisi eksik "
+                "Gomulu BgUtil saglayicisi eksik "
                 f"(node={bool(node_binary)}, server_home={server_home})."
             )
 
