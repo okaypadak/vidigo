@@ -15,7 +15,7 @@ import yt_dlp
 
 from utils.app_logging import log_exception, log_info, log_warning
 from utils.ffmpeg_utils import get_ffmpeg_binary, get_ytdlp_ffmpeg_location
-from utils.runtime_environment import is_container, is_windows
+from utils.runtime_environment import is_container
 from utils.youtube_utils import extract_youtube_playlist_id
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".mkv"}
@@ -132,11 +132,17 @@ def _youtube_js_runtime_options():
 
 
 def _youtube_extractor_args(player_client):
-    """Build YouTube arguments, enabling the managed BgUtil provider when supported."""
+    """Build YouTube options suitable for the active runtime.
+
+    Windows uses yt-dlp's automatic client selection.  Explicitly selecting
+    ``mweb`` would require a PO-token provider, while the default clients can
+    download the available non-token formats without BgUtil.
+    """
+    if not is_container():
+        return {}
+
     extractor_args = {"youtube": {"player_client": [player_client]}}
-    pot_provider_url = ""
-    if is_container() or is_windows():
-        pot_provider_url = os.environ.get("TEXTFORGE_BGUTIL_BASE_URL", "").strip().rstrip("/")
+    pot_provider_url = os.environ.get("TEXTFORGE_BGUTIL_BASE_URL", "").strip().rstrip("/")
     if pot_provider_url:
         extractor_args["youtubepot-bgutilhttp"] = {"base_url": [pot_provider_url]}
     return extractor_args
