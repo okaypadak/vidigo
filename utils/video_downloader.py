@@ -11,11 +11,19 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import HTTPCookieProcessor, Request, build_opener, urlopen
 
+from utils.runtime_environment import is_container
+
+# The BgUtil package is installed for the Docker image.  Its yt-dlp plugin
+# auto-registers an HTTP provider and probes port 4416 even with no extractor
+# configuration.  Windows intentionally has no BgUtil service, so plugins
+# must be disabled before importing yt-dlp.
+if not is_container():
+    os.environ["YTDLP_NO_PLUGINS"] = "1"
+
 import yt_dlp
 
 from utils.app_logging import log_exception, log_info, log_warning
 from utils.ffmpeg_utils import get_ffmpeg_binary, get_ytdlp_ffmpeg_location
-from utils.runtime_environment import is_container
 from utils.youtube_utils import extract_youtube_playlist_id
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".mkv"}

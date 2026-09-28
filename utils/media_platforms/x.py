@@ -7,6 +7,11 @@ so its X-specific options and cookies cannot affect YouTube or Instagram.
 import os
 from urllib.parse import urlparse
 
+from utils.runtime_environment import is_container
+
+if not is_container():
+    os.environ["YTDLP_NO_PLUGINS"] = "1"
+
 import yt_dlp
 
 from .base import MediaPlatform
