@@ -1,4 +1,5 @@
 ﻿import logging
+import asyncio
 import os
 import queue
 import shutil
@@ -31,6 +32,7 @@ from utils.storage_paths import DOWNLOAD_ROOT, MEDIA_ROOT
 from utils.web_markdown import WebMarkdownUnavailableError, crawl_url_to_markdown, crawl_url_tree_to_markdown, save_web_markdown
 from utils.bgutil_provider import start_bgutil_provider
 from utils.shutdown import install_sigint_exit_handler
+from utils.health import check_mcp_health
 from utils.video_downloader import build_unique_filepath, download_instagram_profile_reels_instagrapi, download_youtube_transcript_ytdlp, extract_instagram_shortcode, extract_instagram_username, resolve_cookie_file, sanitize_directory_name, sanitize_filename, save_channel_catalog, strip_title_hashtags
 from utils.youtube_utils import extract_youtube_channel_name, extract_youtube_video_id
 
@@ -935,6 +937,14 @@ def index():
 @app.route("/history_page", methods=["GET"])
 def history_page():
     return render_template("history.html")
+
+
+@app.route("/health", methods=["GET"])
+def health():
+    payload, status_code = asyncio.run(check_mcp_health())
+    response = _json_response({**payload, "api": "ok"}, status=status_code)
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @app.route("/status", methods=["GET"])

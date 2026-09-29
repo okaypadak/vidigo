@@ -11,6 +11,8 @@ import asyncio
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from mcp.server.fastmcp import FastMCP
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 from utils.video_downloader import (
     download_audio_generic,
@@ -24,6 +26,7 @@ from transcribers.whisper_transcriber import transcribe_whisper
 from utils.shutdown import install_sigint_exit_handler
 from utils.bgutil_provider import start_bgutil_provider
 from utils.storage_paths import MEDIA_ROOT
+from utils.health import check_mcp_health
 
 mcp = FastMCP(
     "textforge",
@@ -31,6 +34,13 @@ mcp = FastMCP(
     port=int(os.environ.get("TEXTFORGE_MCP_PORT", "8000")),
     streamable_http_path="/textforge/mcp",
 )
+
+
+@mcp.custom_route("/health", methods=["GET"])
+@mcp.custom_route("/textforge/mcp/health", methods=["GET"])
+async def health(request: Request) -> JSONResponse:
+    payload, status_code = await check_mcp_health()
+    return JSONResponse(payload, status_code=status_code, headers={"Cache-Control": "no-store"})
 
 
 def _ignore_expected_windows_connection_reset(

@@ -1,6 +1,9 @@
 @echo off
 setlocal
 
+cd /d "%~dp0"
+if errorlevel 1 exit /b 1
+
 set "IMAGE_NAME=textforge:latest"
 set "CONTAINER_NAME=textforge"
 set "HOST_MEDIA_DIR=%USERPROFILE%\textforge"
@@ -15,11 +18,30 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo [2/4] Mevcut TextForge container'i temizleniyor...
+echo [2/4] Mevcut TextForge container'i ve latest image temizleniyor...
 docker container inspect "%CONTAINER_NAME%" >nul 2>&1
 if not errorlevel 1 (
     docker stop "%CONTAINER_NAME%" >nul 2>&1
     docker rm "%CONTAINER_NAME%" >nul 2>&1
+    if errorlevel 1 (
+        echo [HATA] Mevcut TextForge container'i silinemedi.
+        pause
+        exit /b 1
+    )
+) else (
+    echo [BILGI] %CONTAINER_NAME% container'i bulunamadi, geciliyor.
+)
+
+docker image inspect "%IMAGE_NAME%" >nul 2>&1
+if not errorlevel 1 (
+    docker image rm "%IMAGE_NAME%"
+    if errorlevel 1 (
+        echo [HATA] Mevcut TextForge image silinemedi.
+        pause
+        exit /b 1
+    )
+) else (
+    echo [BILGI] %IMAGE_NAME% image bulunamadi, geciliyor.
 )
 
 echo [3/4] TextForge image olusturuluyor...

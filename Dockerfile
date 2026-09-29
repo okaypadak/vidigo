@@ -59,6 +59,6 @@ VOLUME ["/data"]
 EXPOSE 5000 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD curl --fail --silent http://127.0.0.1:5000/status || exit 1
+    CMD curl --fail --silent --max-time 4 http://127.0.0.1:5000/health || exit 1
 
 CMD ["sh", "docker-entrypoint.sh"]
