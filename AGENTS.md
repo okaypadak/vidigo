@@ -30,10 +30,18 @@
 - İndirilen medya kökü `C:\Users\<kullanıcı>\textforge` olmalıdır; proje köküne veya geçici klasöre medya bırakılmaz.
 - Transkript, manifest ve TinyDB kaydı ancak işlem sonucunu doğru yansıtacak şekilde yazılır. Başarısız işlem başarıyla indirilmiş gibi işaretlenmez.
 
+## Kalıcı medya dizini değişmezleri
+
+- Medya kökü yalnız hesap klasörlerini içerir: Windows'ta `C:\Users\<kullanıcı>\textforge\<hesap>\`, Docker'da `/data/textforge/<hesap>/`.
+- Her hesap altında kalıcı medya yalnız üç klasöre yazılır: `video\`, `ses\` ve `transcript\` (Docker'da `/` ayıracıyla). Video dosyaları `video`, M4A dosyaları `ses`, transkript dosyaları `transcript` altında tutulur.
+- `textforge` medya kökünün altında `downloads`, `manifests`, `transcripts`, `logs`, `web`, `mcp_temp`, tarayıcı profili veya başka uygulama/ara çıktı klasörü oluşturulmaz; kaynak sahibi bulunamayan medya da kökte bırakılmaz.
+- Manifest, TinyDB geçmişi, loglar, web/Markdown çıktıları, MCP geçici verileri ve tarayıcı profilleri medya kökünün dışında tutulur: Windows'ta `C:\Users\<kullanıcı>\.textforge\`, Docker'da `/data/.textforge/`.
+- Bu dizin sözleşmesi tekil ve profil Instagram akışları, YouTube/X akışları, web arayüzü ve MCP çağrıları için aynıdır; yeni indirme veya transkript akışı bu yapıyı atlayamaz.
+
 ## Windows ve Docker çalışma ortamları
 
-- Yerel Windows başlatıcıları `.venv312\\Scripts\\python.exe` kullanır ve `TEXTFORGE_RUNTIME=windows` ayarlar. Medya kökü `C:\\Users\\<kullanıcı>\\textforge`, cookie kökü `C:\\Users\\<kullanıcı>\\cookie`dir.
-- Docker imajı Linux'tur; `TEXTFORGE_RUNTIME=container`, medya kökü `/data/textforge` ve cookie kökü `/data/cookie`dir. `start_docker_gpu.bat`, Windows'taki bu iki klasörü sırasıyla konteynere bağlar; cookie bağlaması salt-okunurdur.
+- Yerel Windows başlatıcıları `.venv312\\Scripts\\python.exe` kullanır ve `TEXTFORGE_RUNTIME=windows` ayarlar. Medya kökü `C:\\Users\\<kullanıcı>\\textforge`, uygulama durum kökü `C:\\Users\\<kullanıcı>\\.textforge`, cookie kökü `C:\\Users\\<kullanıcı>\\cookie`dir.
+- Docker imajı Linux'tur; `TEXTFORGE_RUNTIME=container`, medya kökü `/data/textforge`, uygulama durum kökü `/data/.textforge` ve cookie kökü `/data/cookie`dir. `docker-build.bat`, Windows'taki bu klasörleri konteynere bağlar; cookie bağlaması salt-okunurdur.
 - Windows'ta FFmpeg önce proje içindeki `ffmpeg\\ffmpeg.exe`, ardından `PATH` üzerinde aranır. Konteynerde Debian paketindeki `/usr/bin/ffmpeg` kullanılır; Windows `.exe` dosyası veya proje içi paket Linux'ta seçilmez.
 - BgUtil ayrı bir Docker imajı ya da Windows süreci olarak çalıştırılmaz. Yalnız TextForge Docker konteynerinde, `start_web.py` tarafından loopback (`127.0.0.1:4416`) üzerinde başlatılır. Windows'ta BgUtil başlatılmaz ve harici bir sağlayıcıya bağlanılmaz.
 

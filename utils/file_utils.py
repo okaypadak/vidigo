@@ -29,7 +29,7 @@ def _write_json_atomic(path, data):
 
 def _transcript_target_dir(folder_name=None, media_dir=None):
     if media_dir:
-        if os.path.basename(media_dir).lower() == "ses":
+        if os.path.basename(media_dir).lower() in {"ses", "video"}:
             path = os.path.join(os.path.dirname(media_dir), "transcript")
         else:
             path = os.path.join(media_dir, "transcript")
@@ -74,8 +74,13 @@ def save_transcript_to_file(video_id, data):
         os.replace(temp_txt_path, txt_path)
 
 
-def save_output_transcript_to_file(video_name, text, folder_name=None, operation_id=None):
-    txt_path = get_transcript_text_filepath(video_name, video_id=operation_id, folder_name=folder_name)
+def save_output_transcript_to_file(video_name, text, folder_name=None, operation_id=None, media_dir=None):
+    txt_path = get_transcript_text_filepath(
+        video_name,
+        video_id=operation_id,
+        folder_name=folder_name,
+        media_dir=media_dir,
+    )
     if os.path.exists(txt_path):
         stem, ext = os.path.splitext(txt_path)
         suffix = _fs_safe_name(operation_id) if operation_id else datetime.now().strftime("%Y%m%d-%H%M%S")

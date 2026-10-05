@@ -27,7 +27,8 @@ class HepsiburadaPortalAdapter(SiteCrawlAdapter):
         except ImportError as exc:
             raise RuntimeError("Hepsiburada adapter'i icin Playwright gerekli.") from exc
 
-        profile_dir = os.path.join(os.path.expanduser("~/textforge"), "browser_profiles", "hepsiburada")
+        from utils.storage_paths import STATE_ROOT
+        profile_dir = os.path.join(STATE_ROOT, "browser_profiles", "hepsiburada")
         os.makedirs(profile_dir, exist_ok=True)
         async with async_playwright() as playwright:
             context = await playwright.chromium.launch_persistent_context(profile_dir, headless=False)

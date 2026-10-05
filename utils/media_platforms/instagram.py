@@ -24,7 +24,7 @@ class InstagramPlatform(MediaPlatform):
         if source_type == "profile_reels":
             username = extract_instagram_username(url)
             if username:
-                path = os.path.join(platform_dir, sanitize_directory_name(username))
+                path = os.path.join(platform_dir, sanitize_directory_name(username), "video")
                 os.makedirs(path, exist_ok=True)
                 return path
         return platform_dir

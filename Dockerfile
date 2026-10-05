@@ -42,6 +42,7 @@ RUN pip install --upgrade pip \
 
 ENV TEXTFORGE_RUNTIME=container \
     TEXTFORGE_MEDIA_ROOT=/data/textforge \
+    TEXTFORGE_STATE_ROOT=/data/.textforge \
     TEXTFORGE_COOKIE_ROOT=/data/cookie \
     TEXTFORGE_FFMPEG_BINARY=/usr/bin/ffmpeg \
     TEXTFORGE_BGUTIL_HOST=127.0.0.1 \

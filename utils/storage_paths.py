@@ -11,7 +11,17 @@ def _media_root():
     return os.path.join(os.path.expanduser("~"), "textforge")
 
 
-# Windows'ta varsayilan: C:\\Users\\<kullanici>\\textforge
+def _state_root():
+    """Keep application metadata outside the user-visible media library."""
+    configured_path = os.environ.get("TEXTFORGE_STATE_ROOT", "").strip()
+    if configured_path:
+        return os.path.abspath(os.path.expanduser(configured_path))
+    return os.path.join(os.path.dirname(_media_root()), ".textforge")
+
+
+# Windows'ta varsayilan medya kok: C:\\Users\\<kullanici>\\textforge
+# Uygulama kayitlari: C:\\Users\\<kullanici>\\.textforge
 MEDIA_ROOT = _media_root()
-DOWNLOAD_ROOT = os.path.join(MEDIA_ROOT, "downloads")
-TRANSCRIPTS_ROOT = os.path.join(MEDIA_ROOT, "transcripts")
+STATE_ROOT = _state_root()
+DOWNLOAD_ROOT = os.path.join(STATE_ROOT, "downloads")
+TRANSCRIPTS_ROOT = os.path.join(STATE_ROOT, "transcripts")

@@ -259,6 +259,10 @@
       transition: 0.2s ease;
     }
 
+    .download-action {
+      text-transform: none;
+    }
+
     .btn-primary {
       background: linear-gradient(135deg, rgba(72, 243, 255, 0.15), rgba(72, 243, 255, 0.05));
       border-color: rgba(72, 243, 255, 0.55);
@@ -484,8 +488,8 @@
     <div class="hero">
       <h1 class="brand">TextForge</h1>
       <div class="sub">
-        Instagram hesap URL'si girilirse Indir modunda hesapta gorunen reels/videolar toplu video olarak saklanir; Sadece MP3 modunda her oge m4a olarak kaydedilir. Instagram reel URL'si girilirse tekli akista video tutulmaz, m4a dosyasi kalir ve Whisper metni ciktiya yazilir.
-        YouTube playlist veya kanal URL'si girilirse tum videolar batch akista m4a olarak iner. Tek video URL'si girilirse video yerine m4a saklanir ve Whisper transkripti ciktiya eklenir.
+        ses indir yalnız M4A dosyasını, transcript indir transkriptini, video indir videoyu saklar. üçlü indir video, M4A ve transkripti birlikte üretir.
+        YouTube video, playlist ve kanal; Instagram reel ve hesap URL'leri desteklenir.
         Her islem platform ve kaynak adina gore ayri manifest JSON'a kaydedilir.
       </div>
     </div>
@@ -515,9 +519,11 @@
         </div>
         <label class="child-pages-option" id="childPagesOption"><input type="checkbox" id="includeChildPages" checked /> Alt sayfalari da tek dosyada birlestir</label>
         <div class="actions" id="downloadActions">
-          <button class="btn btn-secondary" id="btnTranscript" type="button" onclick="downloadSingle('transcript_only')">Sadece Transkript</button>
-          <button class="btn btn-ghost" id="btnMp3" type="button" onclick="downloadSingle('mp3_only')">Sadece MP3</button>
-          <button class="btn btn-primary" id="btnDownload" type="button" onclick="downloadSingle('download')">Indir</button>
+          <button class="btn btn-ghost download-action" id="btnAudio" type="button" onclick="downloadSingle('mp3_only')">ses indir</button>
+          <button class="btn btn-secondary download-action" id="btnTranscript" type="button" onclick="downloadSingle('transcript_only')">transcript indir</button>
+          <button class="btn btn-primary download-action" id="btnDownload" type="button" onclick="downloadSingle('download')">indir</button>
+          <button class="btn btn-primary download-action" id="btnVideo" type="button" onclick="downloadSingle('video_only')">video indir</button>
+          <button class="btn btn-primary download-action" id="btnTriple" type="button" onclick="downloadSingle('triple')">üçlü indir</button>
           <button class="btn btn-primary" id="btnWebMarkdown" type="button" onclick="downloadWebMarkdown()" style="display:none">Markdown Indir</button>
           <button class="btn btn-danger" id="btnStop" type="button" onclick="cancelDownload()" style="display:none">Durdur</button>
         </div>
@@ -595,7 +601,7 @@
     }
 
     function setDownloadBusy(busy) {
-      const ids = ["btnTranscript", "btnMp3", "btnDownload", "btnWebMarkdown"];
+      const ids = ["btnAudio", "btnTranscript", "btnDownload", "btnVideo", "btnTriple", "btnWebMarkdown"];
       ids.forEach(id => {
         const el = document.getElementById(id);
         if (el) el.disabled = busy;
@@ -659,7 +665,7 @@
       const enabled = Boolean(url) && !isMediaPlatformUrl(url);
       document.getElementById("childPagesOption").classList.toggle("show", enabled);
       document.getElementById("btnWebMarkdown").style.display = enabled ? "inline-flex" : "none";
-      ["btnTranscript", "btnMp3", "btnDownload"].forEach(id => {
+      ["btnAudio", "btnTranscript", "btnDownload", "btnVideo", "btnTriple"].forEach(id => {
         document.getElementById(id).style.display = enabled ? "none" : "inline-flex";
       });
     }
@@ -826,7 +832,14 @@
       startLiveLog(operationId);
       startProgressPolling(operationId);
       setDownloadBusy(true);
-      const modeLabel = mode === "transcript_only" ? "Transkript" : mode === "mp3_only" ? "MP3" : "Indir";
+      const modeLabels = {
+        download: "İndir",
+        mp3_only: "Ses indir",
+        transcript_only: "Transcript indir",
+        video_only: "Video indir",
+        triple: "Üçlü indir"
+      };
+      const modeLabel = modeLabels[mode] || "İndir";
       showToast(`${modeLabel} islemi basladi`);
       try {
         const res = await fetch("/download_media", {

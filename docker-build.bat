@@ -7,6 +7,7 @@ if errorlevel 1 exit /b 1
 set "IMAGE_NAME=textforge:latest"
 set "CONTAINER_NAME=textforge"
 set "HOST_MEDIA_DIR=%USERPROFILE%\textforge"
+set "HOST_STATE_DIR=%USERPROFILE%\.textforge"
 set "HOST_COOKIE_DIR=%USERPROFILE%\cookie"
 
 echo.
@@ -54,8 +55,9 @@ if errorlevel 1 (
 
 echo [4/4] TextForge GPU ile arka planda baslatiliyor...
 if not exist "%HOST_MEDIA_DIR%" mkdir "%HOST_MEDIA_DIR%"
+if not exist "%HOST_STATE_DIR%" mkdir "%HOST_STATE_DIR%"
 if not exist "%HOST_COOKIE_DIR%" mkdir "%HOST_COOKIE_DIR%"
-docker run -d --name "%CONTAINER_NAME%" --gpus all -p 5000:5000 -p 8000:8000 -v "%HOST_MEDIA_DIR%:/data/textforge" -v "%HOST_COOKIE_DIR%:/data/cookie:ro" "%IMAGE_NAME%"
+docker run -d --name "%CONTAINER_NAME%" --restart unless-stopped --gpus all -p 5000:5000 -p 8000:8000 -v "%HOST_MEDIA_DIR%:/data/textforge" -v "%HOST_STATE_DIR%:/data/.textforge" -v "%HOST_COOKIE_DIR%:/data/cookie:ro" "%IMAGE_NAME%"
 if errorlevel 1 (
     echo [HATA] TextForge baslatilamadi.
     pause

@@ -28,12 +28,12 @@ from utils.download_service import COOKIE_ROOT, classify_download_url, download_
 from utils.media_platforms import get_media_platform
 from utils.file_utils import load_download_history, save_download_record, save_output_transcript_to_file, save_transcript_to_file, upsert_download_record, upsert_manifest_item
 from utils.markitdown_converter import convert_file_to_markdown, save_markdown_output
-from utils.storage_paths import DOWNLOAD_ROOT, MEDIA_ROOT
+from utils.storage_paths import DOWNLOAD_ROOT, MEDIA_ROOT, STATE_ROOT
 from utils.web_markdown import WebMarkdownUnavailableError, crawl_url_to_markdown, crawl_url_tree_to_markdown, save_web_markdown
 from utils.bgutil_provider import start_bgutil_provider
 from utils.shutdown import install_sigint_exit_handler
 from utils.health import check_mcp_health
-from utils.video_downloader import build_unique_filepath, download_instagram_profile_reels_instagrapi, download_youtube_transcript_ytdlp, extract_instagram_shortcode, extract_instagram_username, resolve_cookie_file, sanitize_directory_name, sanitize_filename, save_channel_catalog, strip_title_hashtags
+from utils.video_downloader import build_unique_filepath, convert_items_to_audio, download_instagram_profile_reels_instagrapi, download_youtube_transcript_ytdlp, extract_instagram_shortcode, extract_instagram_username, resolve_cookie_file, sanitize_directory_name, sanitize_filename, save_channel_catalog, strip_title_hashtags
 from utils.youtube_utils import extract_youtube_channel_name, extract_youtube_video_id
 
 app = Flask(__name__)
@@ -54,8 +54,8 @@ _PROGRESS_LOCK = threading.Lock()
 AUDIO_DIR = MEDIA_ROOT
 DOWNLOAD_DIR = DOWNLOAD_ROOT
 MARKITDOWN_UPLOAD_DIR = os.path.join(DOWNLOAD_DIR, "markitdown_uploads")
-WEB_MARKDOWN_DIR = os.path.join(AUDIO_DIR, "web")
-LOG_DIR = os.path.join(AUDIO_DIR, "logs")
+WEB_MARKDOWN_DIR = os.path.join(STATE_ROOT, "web")
+LOG_DIR = os.path.join(STATE_ROOT, "logs")
 LOG_PATH = os.path.join(LOG_DIR, "app.log")
 
 os.makedirs(AUDIO_DIR, exist_ok=True)
@@ -318,8 +318,17 @@ def _persist_output_transcript(payload, operation_id=None):
     else:
         video_name = f"{folder_name}-output"
 
+    first_item = items[0] if items else {}
+    media_path = first_item.get("file_path") or first_item.get("removed_file_path")
+    media_dir = os.path.dirname(media_path) if media_path else payload.get("download_dir")
     try:
-        path = save_output_transcript_to_file(video_name, text, folder_name=folder_name, operation_id=operation_id)
+        path = save_output_transcript_to_file(
+            video_name,
+            text,
+            folder_name=folder_name,
+            operation_id=operation_id,
+            media_dir=media_dir,
+        )
         payload["output_transcript_path"] = path
         log_info(logger, "Cikti transkripti dosyaya kaydedildi", stage="output.save", txt_path=path)
         return path
@@ -333,9 +342,9 @@ def _process_audio_item(url, *, cookie_path=None, mode="download", source_type=N
     keep_audio_files = mode in {"download", "mp3_only"}
     request = classify_download_url(url)
     platform = request["platform"]
-    # Instagram transkriptleri icin cikarilan M4A, kullanicinin TextForge klasorunde
-    # sonraki kullanimlar icin tutulur.
     if platform == "instagram" and mode == "transcript_only":
+        # Transcript-only is still a durable Instagram media request: Whisper
+        # consumes the generated M4A, which remains under <account>/ses.
         keep_audio_files = True
     item_source_type = source_type or request["source_type"]
     item_source_url = source_url or url
@@ -649,8 +658,6 @@ def _already_downloaded(video_id, mode):
 
 def _instagram_profile_payload(url, cookie_path=None, mode="download"):
     transcript_enabled = mode in {"download", "transcript_only"}
-    # Instagram transcript-only requests retain the generated M4A under the
-    # account's ``ses`` directory for subsequent use.
     keep_audio = mode in {"download", "mp3_only", "transcript_only"}
     # Profiles must follow the same media pipeline as a single Instagram URL:
     # Instagrapi MP4 -> shared FFmpeg M4A -> Whisper (when requested).
@@ -660,6 +667,7 @@ def _instagram_profile_payload(url, cookie_path=None, mode="download"):
     username = extract_instagram_username(url)
     account_dir = os.path.join(AUDIO_DIR, sanitize_directory_name(username)) if username else AUDIO_DIR
     audio_dir = os.path.join(account_dir, "ses")
+    video_dir = os.path.join(account_dir, "video")
 
     log_info(logger, "Instagram profil indirme akisi basladi", stage="instagram.profile.pipeline", url=url, username=username or "?", mode=mode)
 
@@ -696,12 +704,12 @@ def _instagram_profile_payload(url, cookie_path=None, mode="download"):
                                 completed_count=downloaded_count, processed_count=downloaded_count,
                                 current_title=item.get("title") or "")
 
-    # Instagrapi writes each temporary MP4 into the account folder.  The same
+    # Instagrapi writes each temporary MP4 into the account's video folder. The same
     # iteration then converts it under ``ses`` and invokes Whisper before the
     # next reel starts.
     result = download_instagram_profile_reels_instagrapi(
         url,
-        save_path=account_dir,
+        save_path=video_dir,
         cookie_path=resolved_cookie,
         audio_only=audio_only,
         item_callback=on_profile_video,
@@ -927,6 +935,234 @@ def _single_audio_payload(url, cookie_path=None, mode="download", cancel_event=N
         "transcribed_count": transcribed_count,
         "items": items,
     }
+
+
+def _single_video_payload(url, cookie_path=None, cancel_event=None):
+    """Download and persist source videos without creating audio or transcripts."""
+    request = classify_download_url(url)
+    operation_id = get_operation_id()
+    if cancel_event and cancel_event.is_set():
+        return {
+            "platform": request["platform"],
+            "source_type": request["source_type"],
+            "source_url": url,
+            "item_count": 0,
+            "items": [],
+        }
+
+    _set_operation_progress(
+        operation_id,
+        active=True,
+        status="downloading",
+        mode="video_only",
+        platform=request["platform"],
+        source_type=request["source_type"],
+        current_url=url,
+    )
+    result = download_media(url, cookie_path=cookie_path, audio_only=False)
+    item_count = len(result.get("items", []))
+    _set_operation_progress(
+        operation_id,
+        active=False,
+        status="completed",
+        total_count=item_count,
+        completed_count=item_count,
+        processed_count=item_count,
+    )
+    return result
+
+
+def _instagram_triple_payload(url, cookie_path=None, cancel_event=None):
+    """Process every Instagram Reel as MP4 -> M4A -> Whisper before the next one."""
+    request = classify_download_url(url)
+    username = extract_instagram_username(url)
+    source_name = username or "instagram"
+    video_dir = os.path.join(AUDIO_DIR, sanitize_directory_name(source_name), "video")
+    audio_dir = os.path.join(AUDIO_DIR, sanitize_directory_name(source_name), "ses")
+    video_items = []
+    audio_items = []
+    processed_paths = set()
+    operation_id = get_operation_id()
+
+    def process_video_item(video_item, index=1, total=1):
+        if cancel_event and cancel_event.is_set():
+            raise RuntimeError("Indirme kullanici tarafindan iptal edildi.")
+        video_path = video_item.get("file_path")
+        if not video_path or os.path.abspath(video_path) in processed_paths:
+            return
+        processed_paths.add(os.path.abspath(video_path))
+        video_items.append(dict(video_item))
+        item_video_dir = os.path.dirname(video_path)
+        item_audio_dir = (
+            os.path.join(os.path.dirname(item_video_dir), "ses")
+            if os.path.basename(item_video_dir).lower() == "video"
+            else audio_dir
+        )
+        item_source_name = video_item.get("uploader") or source_name
+        _set_operation_progress(
+            operation_id,
+            active=True,
+            status="converting",
+            total_count=total,
+            current_index=index,
+            current_title=video_item.get("title") or "",
+        )
+        audio_item = convert_items_to_audio(
+            [video_item],
+            audio_output_dir=item_audio_dir,
+            remove_source=False,
+        )[0]
+        _set_operation_progress(
+            operation_id,
+            active=True,
+            status="transcribing",
+            total_count=total,
+            current_index=index,
+            current_title=audio_item.get("title") or "",
+        )
+        _persist_downloaded_item(
+            audio_item,
+            platform="instagram",
+            source_type=request["source_type"],
+            source_name=item_source_name,
+            source_url=url,
+            download_dir=item_audio_dir,
+            downloader="instagrapi+ffmpeg+whisper",
+        )
+        if audio_item.get("transcript_error"):
+            raise RuntimeError(audio_item["transcript_error"])
+        audio_items.append(audio_item)
+
+    def on_downloaded(video_item, **metadata):
+        process_video_item(
+            video_item,
+            index=metadata.get("index") or 1,
+            total=metadata.get("total") or 1,
+        )
+
+    result = download_media(
+        url,
+        cookie_path=cookie_path,
+        audio_only=False,
+        item_callback=on_downloaded,
+        persist=False,
+        target_download_dir=video_dir,
+    )
+    for video_item in result.get("items", []):
+        process_video_item(video_item, index=len(audio_items) + 1, total=len(result.get("items", [])))
+
+    if result.get("errors"):
+        raise RuntimeError(result["errors"][0].get("error") or "Instagram Reel zinciri tamamlanamadi.")
+    if not audio_items:
+        raise FileNotFoundError("Instagram icin indirilen video bulunamadi.")
+
+    result["download_dir"] = os.path.dirname(audio_items[0]["file_path"])
+    result["items"] = audio_items
+    result["downloader"] = "instagrapi+ffmpeg+whisper"
+    result["engine"] = "whisper"
+    result["transcribed_count"] = len(audio_items)
+    persist_downloads(result)
+    result["video_items"] = video_items
+    result["video_item_count"] = len(video_items)
+    result["downloader"] = "video+audio+transcript"
+    return result
+
+
+def _triple_payload(url, cookie_path=None, cancel_event=None):
+    """Keep video and M4A files, then create transcripts for the same source."""
+    request = classify_download_url(url)
+    if request["platform"] == "instagram":
+        return _instagram_triple_payload(url, cookie_path=cookie_path, cancel_event=cancel_event)
+
+    video_payload = _single_video_payload(url, cookie_path=cookie_path, cancel_event=cancel_event)
+    if cancel_event and cancel_event.is_set():
+        return video_payload
+
+    if video_payload.get("platform") == "youtube":
+        video_items = video_payload.get("items", [])
+        if not video_items:
+            raise FileNotFoundError("YouTube icin indirilen video bulunamadi.")
+        first_video_path = video_items[0].get("file_path") or ""
+        video_dir = os.path.dirname(first_video_path)
+        audio_dir = (
+            os.path.join(os.path.dirname(video_dir), "ses")
+            if os.path.basename(video_dir).lower() == "video"
+            else os.path.join(AUDIO_DIR, sanitize_directory_name(video_payload.get("source_name") or "youtube"), "ses")
+        )
+        audio_items = convert_items_to_audio(
+            video_items,
+            audio_output_dir=audio_dir,
+            remove_source=False,
+        )
+        operation_id = get_operation_id()
+        for index, item in enumerate(audio_items, start=1):
+            item_url = item.get("webpage_url") or item.get("source_url") or url
+            video_id = item.get("video_id") or item.get("id") or extract_youtube_video_id(item_url)
+            _set_operation_progress(
+                operation_id,
+                active=True,
+                status="transcribing",
+                total_count=len(audio_items),
+                current_index=index,
+                current_title=item.get("title") or "",
+            )
+            try:
+                transcript_dir = os.path.join(os.path.dirname(audio_dir), "transcript")
+                subtitle_payload, text = _youtube_subtitle_transcript(
+                    item_url,
+                    transcript_dir,
+                    cookie_path=resolve_cookie_file("youtube", cookie_path=cookie_path, cookie_dir=COOKIE_ROOT),
+                )
+                engine = "ytdlp_subtitle"
+            except Exception as subtitle_error:
+                log_warning(
+                    logger,
+                    "YouTube altyazisi bulunamadi, Whisper'a geciliyor",
+                    stage="triple.transcribe",
+                    url=item_url,
+                    error=str(subtitle_error),
+                )
+                subtitle_payload = None
+                text = _whisper(item["file_path"])
+                engine = "whisper"
+
+            item["engine"] = engine
+            item["transcript"] = text
+            _persist_transcript(
+                item["file_path"],
+                item_url,
+                "youtube",
+                engine,
+                text,
+                video_id=video_id,
+                transcript_payload=subtitle_payload,
+                uploader=item.get("uploader"),
+            )
+
+        audio_payload = {
+            **video_payload,
+            "download_dir": audio_dir,
+            "items": audio_items,
+            "downloader": "yt-dlp+ffmpeg+subtitle-or-whisper",
+            "engine": "ytdlp_subtitle_or_whisper",
+            "transcribed_count": len(audio_items),
+        }
+        persist_downloads(audio_payload)
+        audio_payload["video_items"] = video_items
+        audio_payload["video_item_count"] = len(video_items)
+        audio_payload["downloader"] = "video+audio+transcript"
+        return audio_payload
+
+    audio_payload = _single_audio_payload(
+        url,
+        cookie_path=cookie_path,
+        mode="download",
+        cancel_event=cancel_event,
+    )
+    audio_payload["video_items"] = video_payload.get("items", [])
+    audio_payload["video_item_count"] = video_payload.get("item_count", len(video_payload.get("items", [])))
+    audio_payload["downloader"] = "video+audio+transcript"
+    return audio_payload
 
 
 @app.route("/", methods=["GET"])
@@ -1243,10 +1479,15 @@ def download_media_route():
     try:
         with bind_operation(operation_id):
             log_info(logger, "URL indirme istegi alindi", stage="request.accepted", url=url, cookie_path=cookie_path or "auto")
-            if mode not in {"download", "mp3_only", "transcript_only"}:
-                raise ValueError("Gecersiz mod. 'download', 'mp3_only' veya 'transcript_only' olmali.")
-            payload = _single_audio_payload(url, cookie_path=cookie_path, mode=mode, cancel_event=cancel_event)
-            if mode in {"download", "transcript_only"}:
+            if mode not in {"download", "mp3_only", "transcript_only", "video_only", "triple"}:
+                raise ValueError("Gecersiz mod. 'download', 'mp3_only', 'transcript_only', 'video_only' veya 'triple' olmali.")
+            if mode == "video_only":
+                payload = _single_video_payload(url, cookie_path=cookie_path, cancel_event=cancel_event)
+            elif mode == "triple":
+                payload = _triple_payload(url, cookie_path=cookie_path, cancel_event=cancel_event)
+            else:
+                payload = _single_audio_payload(url, cookie_path=cookie_path, mode=mode, cancel_event=cancel_event)
+            if mode in {"download", "transcript_only", "triple"}:
                 _persist_output_transcript(payload, operation_id=operation_id)
             cancelled = cancel_event.is_set()
             log_info(

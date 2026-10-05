@@ -409,6 +409,34 @@ def _move_item_file_to_uploader_dir(item, base_dir):
     return item
 
 
+def _move_instagram_video_to_account_dir(item, base_dir):
+    """Place a permanent Instagram video under <account>/video."""
+    uploader = item.get("uploader")
+    file_path = item.get("file_path")
+    if not file_path or not uploader:
+        return item
+
+    account_dir = _uploader_download_dir(base_dir, uploader)
+    video_dir = os.path.join(account_dir, "video")
+    os.makedirs(video_dir, exist_ok=True)
+    source_path = os.path.abspath(file_path)
+    if os.path.abspath(os.path.dirname(source_path)) != os.path.abspath(video_dir):
+        stem, extension = os.path.splitext(os.path.basename(source_path))
+        target_path = build_unique_filepath(video_dir, stem, extension)
+        os.replace(source_path, target_path)
+        item["file_path"] = target_path
+        item["file_name"] = os.path.basename(target_path)
+        log_info(
+            logger,
+            "Instagram videosu hesap klasorune tasindi",
+            stage="download.organize",
+            uploader=uploader,
+            source_path=source_path,
+            target_path=target_path,
+        )
+    return item
+
+
 def _find_existing_instagram_file(directory, target, shortcode, audio_only=False):
     """Bu shortcode icin daha once indirilmis dosya varsa yolunu doner."""
     if not shortcode or not os.path.isdir(directory):
@@ -812,7 +840,7 @@ def download_instagram_video(url, save_path="downloads", cookie_path=None):
         raise FileNotFoundError("Instagrapi video dosyasini indirmedi.")
     username = getattr(getattr(media, "user", None), "username", None) or "instagram"
     item = _instagrapi_item(media, video_path, username)
-    item = _move_item_file_to_uploader_dir(item, abs_save_path)
+    item = _move_instagram_video_to_account_dir(item, abs_save_path)
     log_info(logger, "Instagram tek video akisi tamamlandi", stage="instagram.download", url=url, file_path=item["file_path"])
     return item
 
@@ -1154,6 +1182,27 @@ def _instagrapi_item(media, file_path, username):
     }
 
 
+def _publication_sort_key(value):
+    """Normalize publication dates to UTC; unknown dates sort last."""
+    try:
+        if value is None or value == "":
+            return float("inf")
+        if isinstance(value, (int, float)):
+            return float(value)
+        if not isinstance(value, datetime):
+            value = str(value).strip()
+            value = (
+                datetime.strptime(value, "%Y%m%d")
+                if re.fullmatch(r"\d{8}", value)
+                else datetime.fromisoformat(value.replace("Z", "+00:00"))
+            )
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.timestamp()
+    except (ValueError, TypeError, OverflowError, OSError):
+        return float("inf")
+
+
 def download_instagram_profile_reels_instagrapi(
     url,
     save_path="downloads",
@@ -1189,7 +1238,8 @@ def download_instagram_profile_reels_instagrapi(
     if not reels:
         raise FileNotFoundError("Instagram profilinde indirilebilir reel bulunamadi veya reels listesi bos dondu.")
 
-    log_info(logger, "Profil reels listesi hazir; her reel sirasiyla islenecek",
+    reels = sorted(reels, key=lambda media: _publication_sort_key(getattr(media, "taken_at", None)))
+    log_info(logger, "Profil reels listesi hazir; eskiden yeniye islenecek",
              stage="instagram.instagrapi", username=username, total=len(reels))
     items = []
     errors = []
@@ -1277,11 +1327,22 @@ def download_instagram_audio(url, save_path="downloads", codec="m4a", cookie_pat
     except OSError:
         log_warning(logger, "Gecici Instagram video dosyasi silinemedi", stage="instagram.audio", video_path=video_path)
 
+    # A single Reel is first placed under <account>/video by the Instagrapi
+    # downloader.  Its durable audio output belongs in the sibling ses folder,
+    # never alongside temporary or video-only media.
+    video_dir = os.path.dirname(audio_path)
+    if os.path.basename(video_dir).lower() == "video":
+        audio_dir = os.path.join(os.path.dirname(video_dir), "ses")
+        os.makedirs(audio_dir, exist_ok=True)
+        target_path = build_unique_filepath(audio_dir, stem, f".{codec}")
+        os.replace(audio_path, target_path)
+        audio_path = target_path
+
     log_info(logger, "Instagram ses cikarma akisi tamamlandi", stage="instagram.audio", audio_path=audio_path)
     return audio_path
 
 
-def convert_items_to_audio(items, codec="m4a"):
+def convert_items_to_audio(items, codec="m4a", audio_output_dir=None, remove_source=True):
     converted_items = []
     for item in items or []:
         item_copy = dict(item)
@@ -1305,14 +1366,17 @@ def convert_items_to_audio(items, codec="m4a"):
             continue
 
         stem = os.path.splitext(os.path.basename(abs_file_path))[0]
-        audio_path = build_unique_filepath(os.path.dirname(abs_file_path), stem, f".{codec}")
+        output_dir = os.path.abspath(audio_output_dir or os.path.dirname(abs_file_path))
+        os.makedirs(output_dir, exist_ok=True)
+        audio_path = build_unique_filepath(output_dir, stem, f".{codec}")
         _extract_audio_to_m4a(abs_file_path, audio_path)
 
-        try:
-            os.remove(abs_file_path)
-            log_info(logger, "Gecici video dosyasi silindi", stage="audio.batch", video_path=abs_file_path, audio_path=audio_path)
-        except OSError:
-            log_warning(logger, "Gecici video dosyasi silinemedi", stage="audio.batch", video_path=abs_file_path, audio_path=audio_path)
+        if remove_source:
+            try:
+                os.remove(abs_file_path)
+                log_info(logger, "Gecici video dosyasi silindi", stage="audio.batch", video_path=abs_file_path, audio_path=audio_path)
+            except OSError:
+                log_warning(logger, "Gecici video dosyasi silinemedi", stage="audio.batch", video_path=abs_file_path, audio_path=audio_path)
 
         item_copy["file_path"] = audio_path
         item_copy["file_name"] = os.path.basename(audio_path)
@@ -1627,6 +1691,7 @@ def _flatten_entries(entries, uploader_fallback=None):
             "video_id": video_id,
             "title": entry.get("title"),
             "uploader": entry.get("uploader") or entry.get("channel") or uploader_fallback,
+            "published_at": entry.get("timestamp") or entry.get("upload_date") or entry.get("release_timestamp") or entry.get("release_date"),
         })
     return items
 
@@ -1649,6 +1714,30 @@ def _fetch_youtube_tab(tab_url, ydl_opts):
     except Exception:
         log_exception(logger, "YouTube tab listesi alinamadi", stage="youtube.list", url=tab_url)
         return None
+
+
+def _sort_youtube_source_items(items, ydl_opts):
+    """Resolve missing dates before any serial downloads, then sort oldest first."""
+    metadata_opts = {**ydl_opts, "extract_flat": False, "noplaylist": True}
+    missing = [item for item in items if _publication_sort_key(item.get("published_at")) == float("inf")]
+    if missing:
+        log_info(logger, "Kronolojik siralama icin video tarihleri aliniyor",
+                 stage="youtube.list", item_count=len(missing))
+        with yt_dlp.YoutubeDL(metadata_opts) as ydl:
+            for item in missing:
+                try:
+                    info = ydl.extract_info(item["url"], download=False) or {}
+                    item["published_at"] = (
+                        info.get("timestamp") or info.get("upload_date")
+                        or info.get("release_timestamp") or info.get("release_date")
+                    )
+                except Exception:
+                    log_exception(logger, "Video yayin tarihi alinamadi", stage="youtube.list", url=item["url"])
+    unknown_count = sum(_publication_sort_key(item.get("published_at")) == float("inf") for item in items)
+    if unknown_count:
+        log_warning(logger, "Yayin tarihi bulunamayan videolar listenin sonunda islenecek",
+                    stage="youtube.list", item_count=unknown_count)
+    return sorted(items, key=lambda item: _publication_sort_key(item.get("published_at")))
 
 
 def list_youtube_video_urls(url, cookie_path=None):
@@ -1678,7 +1767,7 @@ def list_youtube_video_urls(url, cookie_path=None):
 
         items = _flatten_entries(info.get("entries") or [], uploader_fallback=uploader)
         log_info(logger, "YouTube playlist video listesi alindi", stage="youtube.list", url=url, playlist_id=playlist_id, item_count=len(items))
-        return items
+        return _sort_youtube_source_items(items, ydl_opts)
 
     # Tek video URL'si mi?
     parsed = _parse_url(url)
@@ -1728,7 +1817,7 @@ def list_youtube_video_urls(url, cookie_path=None):
         log_info(logger, "YouTube tab islendi", stage="youtube.list", url=tab_url, new_items=len(all_items))
 
     log_info(logger, "YouTube kaynak video listesi alindi", stage="youtube.list", url=url, item_count=len(all_items))
-    return all_items
+    return _sort_youtube_source_items(all_items, ydl_opts)
 
 
 def fetch_channel_catalog(url, cookie_path=None):

@@ -6,9 +6,10 @@ from utils.file_utils import save_download_record, upsert_download_record, upser
 from utils.video_downloader import (
     convert_items_to_audio,
     resolve_cookie_file,
+    sanitize_directory_name,
 )
 from utils.media_platforms import classify_media_url, get_media_platform
-from utils.storage_paths import DOWNLOAD_ROOT
+from utils.storage_paths import DOWNLOAD_ROOT, MEDIA_ROOT
 
 COOKIE_ROOT = os.path.abspath(os.path.expanduser(
     os.environ.get("TEXTFORGE_COOKIE_ROOT", os.path.join("~", "cookie"))
@@ -24,10 +25,30 @@ def classify_download_url(url):
 
 
 def _platform_download_dir(platform):
-    path = os.path.join(DOWNLOAD_ROOT, platform)
-    os.makedirs(path, exist_ok=True)
-    log_info(logger, "Platform indirme klasoru hazir", stage="download.prepare", platform=platform, path=path)
-    return path
+    os.makedirs(MEDIA_ROOT, exist_ok=True)
+    log_info(logger, "Medya hesabi koku hazir", stage="download.prepare", platform=platform, path=MEDIA_ROOT)
+    return MEDIA_ROOT
+
+
+def _organize_video_items(result):
+    """Move every durable video into <account>/video after its owner is known."""
+    for item in result.get("items") or []:
+        file_path = item.get("file_path")
+        if not file_path or not os.path.isfile(file_path):
+            continue
+        account_name = sanitize_directory_name(item.get("uploader") or "unknown")
+        target_dir = os.path.join(MEDIA_ROOT, account_name, "video")
+        os.makedirs(target_dir, exist_ok=True)
+        source_path = os.path.abspath(file_path)
+        if os.path.abspath(os.path.dirname(source_path)) == os.path.abspath(target_dir):
+            continue
+        stem, extension = os.path.splitext(os.path.basename(source_path))
+        from utils.video_downloader import build_unique_filepath
+        target_path = build_unique_filepath(target_dir, stem, extension)
+        os.replace(source_path, target_path)
+        item["file_path"] = target_path
+        item["file_name"] = os.path.basename(target_path)
+        log_info(logger, "Video hesap klasorune tasindi", stage="download.organize", account=account_name, target_path=target_path)
 
 
 def _source_download_dir(platform_dir, source_type, url):
@@ -36,7 +57,7 @@ def _source_download_dir(platform_dir, source_type, url):
 
 
 def _single_result(platform, source_type, url, item, download_dir, downloader):
-    source_name = item.get("title") or item.get("video_id") or item.get("shortcode") or "download"
+    source_name = item.get("uploader") or item.get("title") or item.get("video_id") or item.get("shortcode") or "download"
     item_dir = os.path.dirname(item.get("file_path") or "") or download_dir
     return {
         "platform": platform,
@@ -175,6 +196,8 @@ def download_media(
         result = _single_result(platform, source_type, url, item, target_download_dir, result["downloader"])
 
     result["cookie_file"] = resolved_cookie
+    if not audio_only:
+        _organize_video_items(result)
     if audio_only and not platform_adapter.converts_audio_during_download(source_type):
         log_info(
             logger,

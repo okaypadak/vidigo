@@ -15,6 +15,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from utils.video_downloader import (
+    build_unique_filepath,
     download_audio_generic,
     download_youtube_transcript_ytdlp,
     extract_instagram_shortcode,
@@ -25,7 +26,7 @@ from utils.youtube_utils import extract_youtube_video_id
 from transcribers.whisper_transcriber import transcribe_whisper
 from utils.shutdown import install_sigint_exit_handler
 from utils.bgutil_provider import start_bgutil_provider
-from utils.storage_paths import MEDIA_ROOT
+from utils.storage_paths import MEDIA_ROOT, STATE_ROOT
 from utils.health import check_mcp_health
 
 mcp = FastMCP(
@@ -60,8 +61,8 @@ async def _run_streamable_http() -> None:
     asyncio.get_running_loop().set_exception_handler(_ignore_expected_windows_connection_reset)
     await mcp.run_streamable_http_async()
 
-DOWNLOAD_DIR = os.path.join(MEDIA_ROOT, "mcp_temp")
-TRANSCRIPT_DIR = os.path.join(MEDIA_ROOT, "transcript", "mcp")
+DOWNLOAD_DIR = os.path.join(STATE_ROOT, "mcp_temp")
+TRANSCRIPT_DIR = os.path.join(STATE_ROOT, "transcript", "mcp")
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 os.makedirs(TRANSCRIPT_DIR, exist_ok=True)
 
@@ -100,6 +101,7 @@ def transcribe_url(url: str, language: str = "tr", model: str = "medium") -> str
 
 
 def _write_unique(path: str, content: str) -> str:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     if os.path.exists(path):
         base, ext = os.path.splitext(path)
         counter = 2
@@ -130,6 +132,21 @@ def _media_platform_and_stem(url: str) -> tuple[str, str]:
     raise ValueError("Sadece YouTube ve Instagram URL'leri desteklenmektedir.")
 
 
+def _instagram_audio_dir(audio_path: str) -> str:
+    """Move MCP-created Instagram M4A into <account>/ses."""
+    source_dir = os.path.dirname(os.path.abspath(audio_path))
+    if os.path.basename(source_dir).lower() == "ses":
+        return os.path.abspath(audio_path)
+    account_dir = os.path.dirname(source_dir) if os.path.basename(source_dir).lower() == "video" else source_dir
+    target_dir = os.path.join(account_dir, "ses")
+    os.makedirs(target_dir, exist_ok=True)
+    stem, extension = os.path.splitext(os.path.basename(audio_path))
+    target_path = build_unique_filepath(target_dir, stem, extension)
+    if os.path.abspath(audio_path) != os.path.abspath(target_path):
+        os.replace(audio_path, target_path)
+    return target_path
+
+
 def _transcribe_media_to_markdown(
     url: str,
     language: str = "tr",
@@ -157,17 +174,26 @@ def _transcribe_media_to_markdown(
         except Exception:
             pass
 
-    audio_path = download_audio_generic(url, save_path=DOWNLOAD_DIR)
+    audio_base_dir = MEDIA_ROOT if platform == "instagram" else DOWNLOAD_DIR
+    audio_path = download_audio_generic(url, save_path=audio_base_dir)
+    if platform == "instagram":
+        audio_path = _instagram_audio_dir(audio_path)
 
     try:
         transcript = transcribe_whisper(audio_path, lang=language, model_path=model)
     finally:
-        try:
-            os.remove(audio_path)
-        except OSError:
-            pass
+        if platform != "instagram":
+            try:
+                os.remove(audio_path)
+            except OSError:
+                pass
 
-    md_path = _write_unique(os.path.join(TRANSCRIPT_DIR, f"{stem}.md"), transcript)
+    transcript_dir = (
+        os.path.join(os.path.dirname(os.path.dirname(audio_path)), "transcript")
+        if platform == "instagram"
+        else TRANSCRIPT_DIR
+    )
+    md_path = _write_unique(os.path.join(transcript_dir, f"{stem}.md"), transcript)
     return transcript, md_path
 
 
