@@ -51,10 +51,7 @@
 - Bu doğrulama yapılmadan rastgele veya eski bir CUDA/PyTorch sürümü denenmez; yalnızca doğrulanan sürüm kurulabilir.
 - Kurulum ve doğrulama, uygulamanın kullandığı sanal ortamda (`.venv312`) yapılır; sistem genelindeki Python paketleri esas alınmaz.
 
-## Web Markdown adapter'ları
+## Web Markdown motoru
 
-- Kullanıcı bir site için "adapter yap" dediğinde adapter, yalnızca açılış sayfasını kaydetmekle yetinmez; render edilmiş sol menüyü/rehber ağacını bulur, ilgili tüm yaprak sayfaları tek tek gezer ve içeriklerini birlikte toplar. Menü yoksa veya doküman gerçekten tek sayfaysa bu durum açıkça belirtilir.
-- `TrendyolDocumentationAdapter` (`trendyol_documentation`)
-- `IdeasoftStoplightAdapter` (`ideasoft_stoplight`)
-- `MetaInstagramPlatformAdapter` (`meta_instagram_platform`)
-- `HepsiburadaPortalAdapter` (`hepsiburada_portal`)
+- Web dokümantasyonu siteye özel adapter'larla değil, genel amaçlı iki motorla işlenir: `PageDiscoveryEngine` render edilmiş dahili bağlantıları sayfa sınırıyla keşfeder; `MarkdownConversionEngine` her sayfanın ana içeriğini temiz Markdown'a çevirir.
+- Taranan URL aynı alan adıyla sınırlıdır; görsel, arşiv ve belge dosyaları sayfa ağacına dahil edilmez. Başlangıç URL'si de her zaman çıktıya dahildir.

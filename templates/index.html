@@ -460,6 +460,14 @@
       color: var(--muted);
     }
 
+    .copy-transcript-btn {
+      display: none;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .copy-transcript-btn.show { display: inline-flex; }
+
     .log-console {
       min-height: 260px;
       max-height: 420px;
@@ -506,7 +514,7 @@
     <div class="panel-grid">
       <section class="panel" id="singlePanel">
         <div class="eyebrow"><span>01</span> URL Indir</div>
-        <label class="label" for="videoUrl">YouTube, Instagram veya web sayfasi URL</label>
+        <label class="label" for="videoUrl">YouTube, Instagram, X veya web sayfasi URL</label>
         <input type="text" id="videoUrl" list="recentUrls" placeholder="ornek: https://developers.facebook.com/documentation/..." oninput="updateUrlAction()" />
         <datalist id="recentUrls"></datalist>
         <div class="badge-row">
@@ -515,13 +523,14 @@
           <div class="badge">YouTube channel</div>
           <div class="badge">Instagram reel</div>
           <div class="badge">Instagram hesap</div>
+          <div class="badge">X video</div>
           <div class="badge">Web dokumantasyonu</div>
         </div>
         <label class="child-pages-option" id="childPagesOption"><input type="checkbox" id="includeChildPages" checked /> Alt sayfalari da tek dosyada birlestir</label>
         <div class="actions" id="downloadActions">
           <button class="btn btn-ghost download-action" id="btnAudio" type="button" onclick="downloadSingle('mp3_only')">ses indir</button>
           <button class="btn btn-secondary download-action" id="btnTranscript" type="button" onclick="downloadSingle('transcript_only')">transcript indir</button>
-          <button class="btn btn-primary download-action" id="btnDownload" type="button" onclick="downloadSingle('download')">indir</button>
+          <button class="btn btn-secondary copy-transcript-btn" id="btnCopyTranscript" type="button" onclick="copyTranscript()">Transkripti Kopyala</button>
           <button class="btn btn-primary download-action" id="btnVideo" type="button" onclick="downloadSingle('video_only')">video indir</button>
           <button class="btn btn-primary download-action" id="btnTriple" type="button" onclick="downloadSingle('triple')">üçlü indir</button>
           <button class="btn btn-primary" id="btnWebMarkdown" type="button" onclick="downloadWebMarkdown()" style="display:none">Markdown Indir</button>
@@ -565,6 +574,7 @@
     let liveLogCloseTimer = null;
     let currentOperationId = null;
     let progressPollTimer = null;
+    let currentTranscriptText = "";
     const RECENT_URLS_STORAGE_KEY = "textforge.recentUrls";
     const RECENT_URLS_LIMIT = 10;
 
@@ -601,7 +611,7 @@
     }
 
     function setDownloadBusy(busy) {
-      const ids = ["btnAudio", "btnTranscript", "btnDownload", "btnVideo", "btnTriple", "btnWebMarkdown"];
+      const ids = ["btnAudio", "btnTranscript", "btnVideo", "btnTriple", "btnWebMarkdown"];
       ids.forEach(id => {
         const el = document.getElementById(id);
         if (el) el.disabled = busy;
@@ -654,7 +664,8 @@
         const hostname = new URL(url).hostname.toLowerCase();
         return hostname === "youtu.be"
           || hostname === "youtube.com" || hostname.endsWith(".youtube.com")
-          || hostname === "instagram.com" || hostname.endsWith(".instagram.com");
+          || hostname === "instagram.com" || hostname.endsWith(".instagram.com")
+          || hostname === "x.com" || hostname.endsWith(".x.com");
       } catch {
         return false;
       }
@@ -665,7 +676,7 @@
       const enabled = Boolean(url) && !isMediaPlatformUrl(url);
       document.getElementById("childPagesOption").classList.toggle("show", enabled);
       document.getElementById("btnWebMarkdown").style.display = enabled ? "inline-flex" : "none";
-      ["btnAudio", "btnTranscript", "btnDownload", "btnVideo", "btnTriple"].forEach(id => {
+      ["btnAudio", "btnTranscript", "btnVideo", "btnTriple"].forEach(id => {
         document.getElementById(id).style.display = enabled ? "none" : "inline-flex";
       });
     }
@@ -741,7 +752,29 @@
     }
 
     function setResult(data) {
-      // Cikti paneli kaldirildi; islem detaylari canli logda gorunur.
+      const copyButton = document.getElementById("btnCopyTranscript");
+      currentTranscriptText = typeof data === "string" ? data.trim() : "";
+      copyButton.classList.toggle("show", Boolean(currentTranscriptText));
+    }
+
+    async function copyTranscript() {
+      if (!currentTranscriptText) return;
+
+      try {
+        await navigator.clipboard.writeText(currentTranscriptText);
+        showToast("Transcript panoya kopyalandi", "ok");
+      } catch {
+        const textarea = document.createElement("textarea");
+        textarea.value = currentTranscriptText;
+        textarea.setAttribute("readonly", "");
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.select();
+        const copied = document.execCommand("copy");
+        textarea.remove();
+        showToast(copied ? "Transcript panoya kopyalandi" : "Transcript kopyalanamadi", copied ? "ok" : "err");
+      }
     }
 
     function transcriptTextFromResponse(data) {

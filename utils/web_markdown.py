@@ -1,12 +1,18 @@
+"""Genel amaçlı web sayfası keşif ve Markdown dönüştürme akışı.
+
+Siteye özel adapter'lar yerine iki küçük motor kullanılır: ilki aynı
+doküman alanındaki sayfaları keşfeder, ikincisi her sayfanın okunabilir
+ana içeriğini Markdown'a dönüştürür.
+"""
+
 import asyncio
 import ipaddress
 import os
 import re
 import socket
+from collections import deque
 from datetime import datetime
-from urllib.parse import urlparse
-
-from utils.web_crawl_adapters import fetch_access_plan, resolve_site_adapter
+from urllib.parse import urljoin, urlparse, urlunparse
 
 
 class WebMarkdownUnavailableError(RuntimeError):
@@ -17,19 +23,15 @@ def validate_web_url(url):
     parsed = urlparse((url or "").strip())
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         raise ValueError("Gecerli bir http veya https URL girin.")
-
     hostname = parsed.hostname.lower()
     if hostname == "localhost" or hostname.endswith(".localhost"):
         raise ValueError("Yerel adresler taranamaz.")
-
     try:
         addresses = {item[4][0] for item in socket.getaddrinfo(hostname, None)}
     except socket.gaierror as exc:
         raise ValueError("Alan adi cozumlenemedi.") from exc
-
     for address in addresses:
-        ip = ipaddress.ip_address(address)
-        if not ip.is_global:
+        if not ipaddress.ip_address(address).is_global:
             raise ValueError("Genel internete acik olmayan adresler taranamaz.")
     return parsed.geturl()
 
@@ -38,37 +40,117 @@ def _load_crawler():
     try:
         from crawl4ai import AsyncWebCrawler, BrowserConfig, CacheMode, CrawlerRunConfig
         from crawl4ai.content_filter_strategy import PruningContentFilter
-        from crawl4ai.deep_crawling import BFSDeepCrawlStrategy, DomainFilter, FilterChain, URLPatternFilter
         from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
     except ImportError as exc:
         raise WebMarkdownUnavailableError(
             "Crawl4AI kurulu degil. requirements.txt yuklendikten sonra tekrar deneyin."
         ) from exc
-    return (
-        AsyncWebCrawler, BrowserConfig, CacheMode, CrawlerRunConfig, PruningContentFilter,
-        DefaultMarkdownGenerator, BFSDeepCrawlStrategy, DomainFilter, FilterChain, URLPatternFilter,
+    return AsyncWebCrawler, BrowserConfig, CacheMode, CrawlerRunConfig, PruningContentFilter, DefaultMarkdownGenerator
+
+
+def _report_progress(progress_callback, event, **fields):
+    if progress_callback is None:
+        return
+    try:
+        progress_callback(event, **fields)
+    except Exception:
+        pass
+
+
+class PageDiscoveryEngine:
+    """Bir sitenin render edilmiş bağlantılarından sınırlı bir sayfa ağacı kurar."""
+
+    max_pages = 100
+    _ignored_suffixes = re.compile(
+        r"\.(?:7z|bmp|css|csv|docx?|eot|gif|ico|jpe?g|js|json|map|mp[34]|otf|pdf|png|svg|tar|ttf|webm|webp|woff2?|xls[xm]?)$",
+        re.IGNORECASE,
     )
 
+    def __init__(self, root_url, crawler, raw_config, progress_callback=None):
+        self.root_url = root_url
+        self.root = urlparse(root_url)
+        self.crawler = crawler
+        self.raw_config = raw_config
+        self.progress_callback = progress_callback
 
-def _crawler_run_config(url, include_children=False, target_main=True):
-    (
-        _, _, CacheMode, CrawlerRunConfig, PruningContentFilter, DefaultMarkdownGenerator,
-        BFSDeepCrawlStrategy, DomainFilter, FilterChain, URLPatternFilter,
-    ) = _load_crawler()
-    deep_crawl_strategy = None
-    if include_children:
+    async def discover(self):
+        """Genişlik-öncelikli olarak dahili HTML sayfalarını keşfeder."""
+        queue = deque([self.root_url])
+        seen = set()
+        urls = []
+        while queue and len(urls) < self.max_pages:
+            url = queue.popleft()
+            canonical = self._canonical(url)
+            if canonical in seen:
+                continue
+            seen.add(canonical)
+            result = await self.crawler.arun(url=url, config=self.raw_config)
+            if not getattr(result, "success", False):
+                continue
+            urls.append(url)
+            for link in self._links(url, getattr(result, "html", "") or ""):
+                if self._canonical(link) not in seen:
+                    queue.append(link)
+        return urls
+
+    def _links(self, base_url, html):
+        links = []
+        seen = set()
+        for href in re.findall(r"<a\b[^>]*?\bhref\s*=\s*(['\"])(.*?)\1", html, re.IGNORECASE | re.DOTALL):
+            candidate = urljoin(base_url, href[1])
+            parsed = urlparse(candidate)
+            if (
+                parsed.scheme not in {"http", "https"}
+                or parsed.hostname != self.root.hostname
+                or self._ignored_suffixes.search(parsed.path)
+            ):
+                continue
+            canonical = self._canonical(candidate)
+            if canonical not in seen:
+                seen.add(canonical)
+                links.append(canonical)
+        return links
+
+    @staticmethod
+    def _canonical(url):
         parsed = urlparse(url)
-        base_path = parsed.path.rstrip("/") or "/"
-        path_pattern = f"{base_path.rstrip('/')}/*" if base_path != "/" else "/*"
-        deep_crawl_strategy = BFSDeepCrawlStrategy(
-            max_depth=5,
-            max_pages=100,
-            filter_chain=FilterChain([
-                DomainFilter(allowed_domains=[parsed.hostname]),
-                URLPatternFilter(path_pattern),
-                URLPatternFilter("*.md", reverse=True),
-            ]),
-        )
+        path = parsed.path or "/"
+        if path != "/":
+            path = path.rstrip("/")
+        return urlunparse((parsed.scheme, parsed.netloc.lower(), path, "", parsed.query, ""))
+
+
+class MarkdownConversionEngine:
+    """Keşfedilmiş bir URL kümesinin ana içeriğini Markdown olarak üretir."""
+
+    def __init__(self, crawler, page_config, progress_callback=None):
+        self.crawler = crawler
+        self.page_config = page_config
+        self.progress_callback = progress_callback
+
+    async def convert(self, urls):
+        pages = []
+        total_pages = len(urls)
+        for index, url in enumerate(urls, start=1):
+            _report_progress(self.progress_callback, "page_started", current_page=index, total_pages=total_pages, url=url)
+            result = await self.crawler.arun(url=url, config=self.page_config)
+            page = _markdown_from_result(result)
+            _report_progress(
+                self.progress_callback, "page_finished", current_page=index, total_pages=total_pages,
+                url=url, saved=bool(page), skipped=not bool(page),
+            )
+            if page:
+                pages.append(page)
+        return pages
+
+
+def _raw_page_config():
+    _, _, CacheMode, CrawlerRunConfig, _, _ = _load_crawler()
+    return CrawlerRunConfig(cache_mode=CacheMode.BYPASS, remove_overlay_elements=True, remove_consent_popups=True)
+
+
+def _markdown_page_config(target_main=True):
+    _, _, CacheMode, CrawlerRunConfig, PruningContentFilter, DefaultMarkdownGenerator = _load_crawler()
     return CrawlerRunConfig(
         cache_mode=CacheMode.BYPASS,
         css_selector="main, article, [role='main']" if target_main else None,
@@ -79,24 +161,7 @@ def _crawler_run_config(url, include_children=False, target_main=True):
         markdown_generator=DefaultMarkdownGenerator(
             content_filter=PruningContentFilter(threshold=0.4, threshold_type="fixed")
         ),
-        deep_crawl_strategy=deep_crawl_strategy,
     )
-
-
-def _navigation_discovery_config():
-    _, _, CacheMode, CrawlerRunConfig, *_ = _load_crawler()
-    # Sol menü bağlantıları ana içerik seçicisiyle kırpılmadan önce alınmalıdır.
-    return CrawlerRunConfig(cache_mode=CacheMode.BYPASS)
-
-
-def _report_progress(progress_callback, event, **fields):
-    """İlerleme bildiriminin taramayı kesmesine izin vermez."""
-    if progress_callback is None:
-        return
-    try:
-        progress_callback(event, **fields)
-    except Exception:
-        pass
 
 
 def _markdown_from_result(result):
@@ -112,99 +177,37 @@ def _markdown_from_result(result):
 
 async def _crawl(url, include_children=False, progress_callback=None):
     AsyncWebCrawler, BrowserConfig, *_ = _load_crawler()
-    adapter = resolve_site_adapter(url)
-    if adapter and adapter.requires_interactive_collection:
-        _report_progress(progress_callback, "crawl_started", url=url, include_children=include_children)
-        pages = await adapter.collect_interactively(
-            url, include_children, progress_callback=progress_callback
-        )
-        pages = [simplify_markdown(page) for page in pages if page]
-        if not pages:
-            raise RuntimeError(f"{adapter.name} dokuman icerigi alinamadi.")
-        return "\n\n---\n\n".join(pages), len(pages)
-
     browser_config = BrowserConfig(headless=True)
     async with AsyncWebCrawler(config=browser_config) as crawler:
-        first_result = await crawler.arun(
-            url=url,
-            config=_navigation_discovery_config() if include_children else _crawler_run_config(url),
-        )
-        access_plan = adapter.discover(url, getattr(first_result, "html", ""), include_children) if adapter else None
-        if access_plan:
-            _report_progress(
-                progress_callback,
-                "crawl_plan_ready",
-                total_pages=len(access_plan.urls),
-                source=access_plan.name,
-            )
-            native_pages = await fetch_access_plan(access_plan, progress_callback=progress_callback)
-            if native_pages:
-                result = native_pages
-            else:
-                result = []
-                for index, page_url in enumerate(access_plan.urls, start=1):
-                    _report_progress(
-                        progress_callback,
-                        "page_started",
-                        current_page=index,
-                        total_pages=len(access_plan.urls),
-                        url=page_url,
-                    )
-                    result.append(await crawler.arun(url=page_url, config=_crawler_run_config(url)))
-                    _report_progress(
-                        progress_callback,
-                        "page_finished",
-                        current_page=index,
-                        total_pages=len(access_plan.urls),
-                        url=page_url,
-                    )
-        elif include_children:
+        if include_children:
             _report_progress(progress_callback, "crawl_started", url=url, include_children=True, total_pages="bilinmiyor")
-            result = await crawler.arun(url=url, config=_crawler_run_config(url, include_children=True))
+            discovery = PageDiscoveryEngine(url, crawler, _raw_page_config(), progress_callback)
+            urls = await discovery.discover()
+            if not urls:
+                raise RuntimeError("Taranabilir bir sayfa bulunamadi.")
+            _report_progress(progress_callback, "crawl_plan_ready", total_pages=len(urls), source="generic_page_discovery")
         else:
             _report_progress(progress_callback, "crawl_started", url=url, include_children=False, total_pages=1)
-            result = first_result
-
-    results = result if isinstance(result, list) else [result]
-    pages = [item if isinstance(item, str) else _markdown_from_result(item) for item in results]
-    pages = [page for page in pages if page]
+            urls = [url]
+        pages = await MarkdownConversionEngine(crawler, _markdown_page_config(), progress_callback).convert(urls)
+        if not pages:
+            pages = await MarkdownConversionEngine(crawler, _markdown_page_config(target_main=False), progress_callback).convert(urls)
     if not pages:
-        # Bazı sade siteler semantic <main> kullanmaz; bu durumda içerik kaybetmemek için
-        # aynı temizleme kurallarıyla body düzeyinde tekrar dene.
-        async with AsyncWebCrawler(config=browser_config) as crawler:
-            result = await crawler.arun(
-                url=url,
-                config=_crawler_run_config(url, include_children=include_children, target_main=False),
-            )
-        results = result if isinstance(result, list) else [result]
-        pages = [_markdown_from_result(item) for item in results]
-        pages = [page for page in pages if page]
-    markdown = "\n\n---\n\n".join(pages)
-    if not markdown:
-        error = getattr(result, "error_message", None) if not isinstance(result, list) else None
-        raise RuntimeError(error or "Sayfa Markdown icerigi uretmedi.")
-    return markdown, len(pages)
+        raise RuntimeError("Sayfa Markdown icerigi uretmedi.")
+    return "\n\n---\n\n".join(pages), len(pages)
 
 
 def simplify_markdown(markdown):
-    """Sayfa navigasyonu yerine okunabilir, linksiz Markdown saklar."""
     text = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", markdown or "")
     text = re.sub(r"\[([^\]]+)\]\((?:[^()]|\([^)]*\))*\)", r"\1", text)
-    ignored_lines = {
-        "copy for llm",
-        "view as markdown",
-        "was this helpful?",
-        "did you find this page helpful?",
-    }
+    ignored_lines = {"copy for llm", "view as markdown", "was this helpful?", "did you find this page helpful?"}
     ignored_sections = {"next steps", "see also", "related links", "related resources", "ilgili baglantilar"}
-    lines = []
-    skipping_section_level = None
+    lines, skipping_section_level = [], None
     for raw_line in text.splitlines():
         line = raw_line.rstrip()
         heading = re.match(r"^(#{1,6})\s+(.+?)\s*$", line)
         if heading:
-            level = len(heading.group(1))
-            title = heading.group(2).strip().lower()
+            level, title = len(heading.group(1)), heading.group(2).strip().lower()
             if title in ignored_sections:
                 skipping_section_level = level
                 continue
@@ -237,7 +240,7 @@ def _safe_stem(url):
     stem = f"{parsed.hostname}{parsed.path}".strip("/") or "web-page"
     for char in '\\/:*?\"<>|':
         stem = stem.replace(char, "_")
-    return stem[:120].strip(". _") or "web-page"
+    return stem[:120].strip(". ") or "web-page"
 
 
 def save_web_markdown(url, markdown, output_dir):
