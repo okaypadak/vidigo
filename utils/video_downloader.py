@@ -167,8 +167,14 @@ def extract_instagram_shortcode(url):
     if "instagram.com" not in host or len(parts) < 2:
         return None
 
-    if parts[0] in ("p", "reel", "reels", "tv"):
+    if parts[0].lower() in ("p", "reel", "reels", "tv"):
         return parts[1]
+
+    # Instagram also shares Reels as /<username>/reel/<shortcode>/.
+    # Treat that as the same single-Reel source, rather than misclassifying
+    # it as a profile URL and rejecting the entire queue before downloading.
+    if len(parts) >= 3 and parts[1].lower() in ("p", "reel", "reels", "tv"):
+        return parts[2]
 
     return None
 

@@ -142,10 +142,18 @@ def upsert_download_record(video_name, transcript=None, **extra_fields):
 def load_download_history(limit=None):
     with _DB_LOCK:
         records = download_db.all()
-    records.sort(key=lambda item: item.get("created_at", ""), reverse=True)
+    records.sort(
+        key=lambda item: item.get("updated_at") or item.get("created_at", ""),
+        reverse=True,
+    )
     if limit is not None:
         return records[:limit]
     return records
+
+
+def download_history_count():
+    with _DB_LOCK:
+        return len(download_db)
 
 
 def _slugify(value):

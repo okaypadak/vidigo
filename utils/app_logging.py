@@ -3,6 +3,7 @@ import contextvars
 import logging
 import os
 import queue
+import sys
 import threading
 from collections import defaultdict, deque
 
@@ -164,6 +165,9 @@ def log_error(logger, message, stage=None, **variables):
 
 
 def log_exception(logger, message, stage=None, **variables):
+    exception = sys.exc_info()[1]
+    if exception is not None and "error" not in variables:
+        variables["error"] = f"{type(exception).__name__}: {exception}"
     suffix = _format_variables(variables)
     text = f"{message} | {suffix}" if suffix else message
     logger.exception(text, extra={"stage": stage or "-"})

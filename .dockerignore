@@ -17,6 +17,8 @@ Scripts/
 Include/
 build/
 dist/
+!frontend/dist/
+!frontend/dist/**
 downloads/
 transcripts/
 ffmpeg/

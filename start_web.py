@@ -9,7 +9,7 @@ import uuid
 from datetime import datetime
 
 from dotenv import load_dotenv
-from flask import Flask, Response, jsonify, render_template, request, stream_with_context
+from flask import Flask, Response, jsonify, request, send_from_directory, stream_with_context
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(BASE_DIR, ".env"))
@@ -26,7 +26,7 @@ from utils.app_logging import (
 )
 from utils.download_service import COOKIE_ROOT, classify_download_url, download_media, persist_downloads
 from utils.media_platforms import get_media_platform
-from utils.file_utils import load_download_history, save_download_record, save_output_transcript_to_file, save_transcript_to_file, upsert_download_record, upsert_manifest_item
+from utils.file_utils import download_history_count, load_download_history, save_download_record, save_output_transcript_to_file, save_transcript_to_file, upsert_download_record, upsert_manifest_item
 from utils.markitdown_converter import convert_file_to_markdown, save_markdown_output
 from utils.storage_paths import DOWNLOAD_ROOT, MEDIA_ROOT, STATE_ROOT
 from utils.web_markdown import WebMarkdownUnavailableError, crawl_url_to_markdown, crawl_url_tree_to_markdown, save_web_markdown
@@ -36,7 +36,8 @@ from utils.health import check_mcp_health
 from utils.video_downloader import build_unique_filepath, convert_items_to_audio, download_instagram_profile_reels_instagrapi, download_youtube_transcript_ytdlp, extract_instagram_shortcode, extract_instagram_username, resolve_cookie_file, sanitize_directory_name, sanitize_filename, save_channel_catalog, strip_title_hashtags
 from utils.youtube_utils import extract_youtube_channel_name, extract_youtube_video_id
 
-app = Flask(__name__)
+SPA_DIST_DIR = os.path.join(BASE_DIR, "frontend", "dist")
+app = Flask(__name__, static_folder=os.path.join(SPA_DIST_DIR, "assets"), static_url_path="/assets")
 
 TRANSCRIPT_DELAY_SECONDS = 3
 BULK_DOWNLOAD_DELAY_SECONDS = 10
@@ -1165,14 +1166,54 @@ def _triple_payload(url, cookie_path=None, cancel_event=None):
     return audio_payload
 
 
+def _markdown_payload(url, include_children=False):
+    """Create a Markdown result using the same storage contract as the standalone route."""
+    markdown = (
+        crawl_url_tree_to_markdown(url)
+        if include_children
+        else crawl_url_to_markdown(url)
+    )
+    markdown_path = save_web_markdown(url, markdown, WEB_MARKDOWN_DIR)
+    save_download_record(
+        video_name=os.path.splitext(os.path.basename(markdown_path))[0],
+        transcript=markdown,
+        platform="web",
+        source_type="web_page",
+        engine="crawl4ai",
+        file_name=os.path.basename(markdown_path),
+        file_path=markdown_path,
+        markdown_path=markdown_path,
+        downloader="crawl4ai",
+        url=url,
+    )
+    return {
+        "platform": "web",
+        "source_type": "web_page",
+        "source_url": url,
+        "markdown_path": markdown_path,
+        "item_count": 1,
+        "items": [{"url": url, "transcript": markdown, "markdown_path": markdown_path}],
+    }
+
+
+def _process_url_payload(url, cookie_path, mode, cancel_event):
+    if mode == "markdown":
+        return _markdown_payload(url)
+    if mode == "video_only":
+        return _single_video_payload(url, cookie_path=cookie_path, cancel_event=cancel_event)
+    if mode == "triple":
+        return _triple_payload(url, cookie_path=cookie_path, cancel_event=cancel_event)
+    return _single_audio_payload(url, cookie_path=cookie_path, mode=mode, cancel_event=cancel_event)
+
+
 @app.route("/", methods=["GET"])
 def index():
-    return render_template("index.html")
+    return send_from_directory(SPA_DIST_DIR, "index.html")
 
 
 @app.route("/history_page", methods=["GET"])
 def history_page():
-    return render_template("history.html")
+    return send_from_directory(SPA_DIST_DIR, "index.html")
 
 
 @app.route("/health", methods=["GET"])
@@ -1251,8 +1292,9 @@ def history():
             limit = request.args.get("limit", type=int)
             log_info(logger, "Gecmis kaydi yukleme istegi alindi", stage="history.load", limit=limit)
             records = load_download_history(limit=limit)
-            log_info(logger, "Gecmis kayitlari yuklendi", stage="history.load", record_count=len(records))
-            return _json_response({"items": records, "total": len(records)}, operation_id=operation_id)
+            total = download_history_count()
+            log_info(logger, "Gecmis kayitlari yuklendi", stage="history.load", record_count=len(records), total=total)
+            return _json_response({"items": records, "total": total}, operation_id=operation_id)
     except Exception as exc:
         with bind_operation(operation_id):
             log_exception(logger, "Gecmis kayitlari yuklenemedi", stage="history.load")
@@ -1510,6 +1552,127 @@ def download_media_route():
             log_exception(logger, "URL indirme akisi basarisiz oldu", stage="request.failed", url=url, error=str(exc))
         _set_operation_progress(operation_id, active=False, status="error", error=str(exc))
         return _json_response({"error": f"Indirme hatasi: {str(exc)}"}, status=500, operation_id=operation_id)
+    finally:
+        with _CANCEL_FLAGS_LOCK:
+            _CANCEL_FLAGS.pop(operation_id, None)
+
+
+@app.route("/queue_process", methods=["POST"])
+def process_queue_route():
+    """Process URLs in the exact client-provided order under one cancellable operation."""
+    operation_id = _operation_id_from_request()
+    data = request.get_json(silent=True) or {}
+    urls = data.get("urls") or []
+    mode = (data.get("mode") or "transcript_only").strip()
+    cookie_path = (data.get("cookie_path") or "").strip() or None
+
+    if not isinstance(urls, list):
+        return _json_response({"error": "urls bir liste olmali."}, status=400, operation_id=operation_id)
+    normalized_urls = []
+    seen_urls = set()
+    for raw_url in urls:
+        url = str(raw_url or "").strip()
+        if url and url not in seen_urls:
+            normalized_urls.append(url)
+            seen_urls.add(url)
+    if not normalized_urls:
+        return _json_response({"error": "Kuyruk bos."}, status=400, operation_id=operation_id)
+    if mode not in {"download", "mp3_only", "transcript_only", "video_only", "triple", "markdown"}:
+        return _json_response({"error": "Gecersiz islem modu."}, status=400, operation_id=operation_id)
+
+    cancel_event = threading.Event()
+    with _CANCEL_FLAGS_LOCK:
+        _CANCEL_FLAGS[operation_id] = cancel_event
+    _set_operation_progress(
+        operation_id,
+        active=True,
+        status="starting",
+        mode=mode,
+        total_count=len(normalized_urls),
+        current_index=0,
+        completed_count=0,
+        skipped_count=0,
+        processed_count=0,
+    )
+    results = []
+    completed_count = 0
+    skipped_count = 0
+    try:
+        with bind_operation(operation_id):
+            log_info(logger, "Sirali link kuyrugu baslatildi", stage="queue.started", total=len(normalized_urls), mode=mode)
+            for index, url in enumerate(normalized_urls, start=1):
+                if cancel_event.is_set():
+                    break
+                _set_operation_progress(
+                    operation_id,
+                    active=True,
+                    status="downloading",
+                    total_count=len(normalized_urls),
+                    current_index=index,
+                    completed_count=completed_count,
+                    skipped_count=skipped_count,
+                    processed_count=index - 1,
+                    current_url=url,
+                    current_title="",
+                )
+                log_info(logger, "Kuyruk linki isleniyor", stage="queue.item.start", index=index, total=len(normalized_urls), url=url)
+                entry = {"url": url, "status": "error"}
+                try:
+                    payload = _process_url_payload(url, cookie_path, mode, cancel_event)
+                    if mode in {"download", "transcript_only", "triple"}:
+                        _persist_output_transcript(payload, operation_id=operation_id)
+                    entry.update({"status": "success", "item_count": payload.get("item_count", 0)})
+                    completed_count += 1
+                    skipped_count += int(payload.get("skipped_count") or 0)
+                    log_info(logger, "Kuyruk linki tamamlandi", stage="queue.item.completed", index=index, total=len(normalized_urls), url=url)
+                except Exception as exc:
+                    entry["error"] = str(exc)
+                    log_exception(
+                        logger,
+                        "Kuyruk linki basarisiz oldu",
+                        stage="queue.item.failed",
+                        index=index,
+                        total=len(normalized_urls),
+                        url=url,
+                        error=str(exc),
+                    )
+                results.append(entry)
+                _set_operation_progress(
+                    operation_id,
+                    active=True,
+                    status="downloaded" if entry["status"] == "success" else "skipped",
+                    total_count=len(normalized_urls),
+                    current_index=index,
+                    completed_count=completed_count,
+                    skipped_count=skipped_count,
+                    processed_count=index,
+                    current_url=url,
+                )
+            cancelled = cancel_event.is_set()
+            failed_count = sum(1 for entry in results if entry["status"] == "error")
+            _set_operation_progress(
+                operation_id,
+                active=False,
+                status="cancelled" if cancelled else "completed",
+                total_count=len(normalized_urls),
+                current_index=len(results),
+                completed_count=completed_count,
+                skipped_count=skipped_count,
+                processed_count=len(results),
+            )
+            log_info(logger, "Sirali link kuyrugu tamamlandi", stage="queue.completed", total=len(normalized_urls), completed=completed_count, failed=failed_count, cancelled=cancelled)
+            return _json_response(
+                {
+                    "status": "cancelled" if cancelled else "success",
+                    "total_count": len(normalized_urls),
+                    "completed_count": completed_count,
+                    "skipped_count": skipped_count,
+                    "failed_count": failed_count,
+                    "processed_count": len(results),
+                    "results": results,
+                },
+                operation_id=operation_id,
+            )
     finally:
         with _CANCEL_FLAGS_LOCK:
             _CANCEL_FLAGS.pop(operation_id, None)

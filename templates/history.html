@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TextForge / Gecmis</title>
+  <title>TextForge / History</title>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Space+Grotesk:wght@400;500;700&display=swap');
 
@@ -263,7 +263,7 @@
     </div>
 
     <section class="panel">
-      <div class="eyebrow"><span>01</span> Indirme Gecmisi</div>
+      <div class="eyebrow"><span>01</span> History / Indirme Gecmisi</div>
       <div class="toolbar">
         <div id="historySummary">Kayitlar yukleniyor...</div>
       </div>
@@ -319,10 +319,13 @@
       navigator.clipboard.writeText(JSON.stringify(item, null, 2)).then(() => showToast("Kayit kopyalandi"));
     }
 
-    function renderHistory(items) {
+    function renderHistory(items, total) {
       historyItems = items || [];
       const list = document.getElementById("historyList");
-      document.getElementById("historySummary").textContent = `${historyItems.length} kayit bulundu`;
+      const visibleCount = historyItems.length;
+      document.getElementById("historySummary").textContent = total > visibleCount
+        ? `${total} kayittan son ${visibleCount} oge gosteriliyor`
+        : `${visibleCount} kayit bulundu`;
 
       if (!historyItems.length) {
         list.innerHTML = `<div class="empty">Henuz kayit bulunmuyor.</div>`;
@@ -364,7 +367,7 @@
         if (!res.ok || data.error) {
           throw new Error(data.error || "Gecmis alinamadi");
         }
-        renderHistory(data.items || []);
+        renderHistory(data.items || [], data.total || 0);
       } catch (error) {
         document.getElementById("historySummary").textContent = "Gecmis yuklenemedi";
         document.getElementById("historyList").innerHTML = `<div class="empty">${escapeHtml(error.message || "Gecmis alinamadi")}</div>`;

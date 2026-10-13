@@ -19,6 +19,8 @@ pyvenv.cfg
 .Python
 build/
 dist/
+!frontend/dist/
+!frontend/dist/**
 develop-eggs/
 eggs/
 *.egg-info/
@@ -50,6 +52,12 @@ cookies/*.session
 # IDEs / editors
 .idea/
 .vscode/
+
+# TypeScript SPA build dependencies stay local; the production bundle is checked in.
+node_modules/
+*.tsbuildinfo
+frontend/vite.config.js
+frontend/vite.config.d.ts
 
 # OS files
 Thumbs.db

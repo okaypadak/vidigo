@@ -504,7 +504,7 @@
 
     <div class="nav">
       <button type="button" onclick="document.getElementById('singlePanel').scrollIntoView({ behavior: 'smooth' })">Tek URL</button>
-      <a href="/history_page">Gecmis</a>
+      <a href="/history_page">History</a>
       <div class="status">
         <div class="dot" id="gpuDot"></div>
         <span id="gpuStatus">SYSTEM CHECK</span>
@@ -530,7 +530,7 @@
         <div class="actions" id="downloadActions">
           <button class="btn btn-ghost download-action" id="btnAudio" type="button" onclick="downloadSingle('mp3_only')">ses indir</button>
           <button class="btn btn-secondary download-action" id="btnTranscript" type="button" onclick="downloadSingle('transcript_only')">transcript indir</button>
-          <button class="btn btn-secondary copy-transcript-btn" id="btnCopyTranscript" type="button" onclick="copyTranscript()">Transkripti Kopyala</button>
+          <button class="btn btn-secondary copy-transcript-btn" id="btnCopyTranscript" type="button" onclick="copyTranscript()" aria-label="Transkripti kopyala" title="Transkripti kopyala">⧉</button>
           <button class="btn btn-primary download-action" id="btnVideo" type="button" onclick="downloadSingle('video_only')">video indir</button>
           <button class="btn btn-primary download-action" id="btnTriple" type="button" onclick="downloadSingle('triple')">üçlü indir</button>
           <button class="btn btn-primary" id="btnWebMarkdown" type="button" onclick="downloadWebMarkdown()" style="display:none">Markdown Indir</button>

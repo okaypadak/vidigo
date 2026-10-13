@@ -68,6 +68,7 @@ echo.
 echo TextForge hazir:
 echo   Web: http://127.0.0.1:5000
 echo   Indirmeler: %HOST_MEDIA_DIR%
+echo   History ve uygulama kayitlari: %HOST_STATE_DIR%
 echo   Cookieler (salt-okunur): %HOST_COOKIE_DIR%
 echo   GPU kontrolu: docker exec %CONTAINER_NAME% python -c "import torch; print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0))"
 echo   Loglar: docker logs -f %CONTAINER_NAME%
